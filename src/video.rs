@@ -30,9 +30,9 @@ fn video_preset(mode: u32) -> (u32, u32, u64, u8) {
 }
 const MAX_JPEG_BYTES: usize = 36_000;
 const CHUNK: usize = 960;
-const HEADER: usize = 15;
+const HEADER: usize = 23; // marker + sender u64 + camera session u64 + seq u32 + indexes
 const MAX_CHUNKS: usize = 40;
-const MAGIC: u8 = 0xF5;
+const MAGIC: u8 = 0xF6; // v0.8, requires same version on all peers
 
 #[derive(Debug)]
 pub struct VideoFrame {
@@ -47,6 +47,7 @@ pub enum VideoEvent {
     Error(String),
 }
 struct Assembly {
+    session_id: u64,
     seq: u32,
     parts: Vec<Option<Vec<u8>>>,
     /// One XOR parity fragment can reconstruct one missing UDP packet.
@@ -55,9 +56,9 @@ struct Assembly {
     updated: Instant,
 }
 impl Assembly {
-    fn new(seq: u32, total: usize) -> Self {
+    fn new(session_id: u64, seq: u32, total: usize) -> Self {
         Self {
-            seq,
+            session_id, seq,
             parts: vec![None; total],
             parity: None,
             recovered: false,
@@ -112,7 +113,7 @@ fn seq_newer(candidate: u32, previous: u32) -> bool {
     let difference = candidate.wrapping_sub(previous);
     difference != 0 && difference < (1u32 << 31)
 }
-fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
+fn make_fragments(id: u64, session_id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
     if jpg.is_empty() || jpg.len() > MAX_JPEG_BYTES { return None; }
     let total = jpg.len().div_ceil(CHUNK);
     if total > MAX_CHUNKS { return None; }
@@ -125,6 +126,7 @@ fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
         let mut datagram = Vec::with_capacity(HEADER + bytes.len());
         datagram.push(MAGIC);
         datagram.extend_from_slice(&id.to_be_bytes());
+        datagram.extend_from_slice(&session_id.to_be_bytes());
         datagram.extend_from_slice(&seq.to_be_bytes());
         datagram.push(part as u8);
         datagram.push(total as u8);
@@ -136,6 +138,7 @@ fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
         let mut datagram = Vec::with_capacity(HEADER + 4 + CHUNK);
         datagram.push(MAGIC);
         datagram.extend_from_slice(&id.to_be_bytes());
+        datagram.extend_from_slice(&session_id.to_be_bytes());
         datagram.extend_from_slice(&seq.to_be_bytes());
         datagram.push(total as u8); // reserved index identifies parity
         datagram.push(total as u8);
@@ -145,18 +148,19 @@ fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
     }
     Some(result)
 }
-fn parse_fragment(datagram: &[u8]) -> Option<(u64, u32, usize, usize, &[u8])> {
+fn parse_fragment(datagram: &[u8]) -> Option<(u64, u64, u32, usize, usize, &[u8])> {
     if datagram.len() <= HEADER || datagram.len() > HEADER + CHUNK + 4 || datagram[0] != MAGIC { return None; }
     let sender = u64::from_be_bytes(datagram[1..9].try_into().ok()?);
-    let seq = u32::from_be_bytes(datagram[9..13].try_into().ok()?);
-    let part = datagram[13] as usize;
-    let total = datagram[14] as usize;
+    let session_id = u64::from_be_bytes(datagram[9..17].try_into().ok()?);
+    let seq = u32::from_be_bytes(datagram[17..21].try_into().ok()?);
+    let part = datagram[21] as usize;
+    let total = datagram[22] as usize;
     if total == 0 || total > MAX_CHUNKS || part > total { return None; }
     let payload = &datagram[HEADER..];
     if part == total {
         if total < 2 || payload.len() != CHUNK + 4 { return None; }
     } else if payload.is_empty() || payload.len() > CHUNK { return None; }
-    Some((sender, seq, part, total, payload))
+    Some((sender, session_id, seq, part, total, payload))
 }
 fn decode_jpeg(id: u64, data: &[u8]) -> Option<VideoFrame> {
     if data.len() > MAX_JPEG_BYTES || data.is_empty() { return None; }
@@ -198,6 +202,7 @@ fn webcam_loop(
         }
     };
     let mut seq = 0u32;
+    let video_session_id = rand::random::<u64>().max(1);
     let mut last_sent: Option<Vec<u8>> = None;
     let mut last_send_time = Instant::now() - Duration::from_secs(2);
     while active.load(Ordering::Relaxed) {
@@ -246,7 +251,7 @@ fn webcam_loop(
                 let encoded = JpegEncoder::new_with_quality(&mut compressed, jpeg_quality)
                     .encode(small.as_raw(), width, height, ExtendedColorType::Rgb8);
                 if encoded.is_err() || compressed.len() > MAX_JPEG_BYTES { continue; }
-                if let Some(chunks) = make_fragments(id, seq, &compressed) {
+                if let Some(chunks) = make_fragments(id, video_session_id, seq, &compressed) {
                     for ip in &ips {
                         let addr = SocketAddr::V4(SocketAddrV4::new(*ip, VIDEO_PORT));
                         for part in &chunks {
@@ -323,29 +328,33 @@ impl VideoSession {
         let worker = thread::spawn(move || {
             let mut packets = [0u8; 1500];
             let mut partial: HashMap<IpAddr, Assembly> = HashMap::new();
-            let mut completed: HashMap<IpAddr, (u64, u32, Instant)> = HashMap::new();
+            let mut completed: HashMap<IpAddr, (u64, u64, u32, Instant)> = HashMap::new();
             while !stop.load(Ordering::Relaxed) {
                 match rx_socket.recv_from(&mut packets) {
                     Ok((size, source)) => {
                         let IpAddr::V4(ip) = source.ip() else { continue; };
                         if !valid_peers.lock().map(|p| p.contains(&ip)).unwrap_or(false) { continue; }
-                        let Some((id, seq, part, total, payload)) = parse_fragment(&packets[..size]) else { continue; };
-                        // Older fragments should never replace a newer in-progress frame.
-                        if let Some((previous_id, previous_seq, time)) = completed.get(&source.ip()) {
-                            if *previous_id == id && time.elapsed() < Duration::from_secs(2)
+                        let Some((id, session_id, seq, part, total, payload)) =
+                            parse_fragment(&packets[..size]) else { continue; };
+                        // The camera session changes on re-enable; a stream restart
+                        // is accepted immediately rather than waiting for a two-second expiry.
+                        if let Some((previous_id, previous_session, previous_seq, time)) = completed.get(&source.ip()) {
+                            if *previous_id == id && *previous_session == session_id
+                                && time.elapsed() < Duration::from_secs(2)
                                 && !seq_newer(seq, *previous_seq) { continue; }
                         }
                         let entry = partial.entry(source.ip())
-                            .or_insert_with(|| Assembly::new(seq, total));
-                        if entry.seq != seq || entry.parts.len() != total {
-                            if entry.updated.elapsed() < Duration::from_millis(700)
+                            .or_insert_with(|| Assembly::new(session_id, seq, total));
+                        if entry.session_id != session_id || entry.seq != seq || entry.parts.len() != total {
+                            if entry.session_id == session_id
+                                && entry.updated.elapsed() < Duration::from_millis(700)
                                 && !seq_newer(seq, entry.seq) { continue; }
-                            *entry = Assembly::new(seq, total);
+                            *entry = Assembly::new(session_id, seq, total);
                         }
                         if let Some(jpeg) = entry.insert(part, payload) {
                             let was_recovered = entry.recovered;
                             partial.remove(&source.ip());
-                            completed.insert(source.ip(), (id, seq, Instant::now()));
+                            completed.insert(source.ip(), (id, session_id, seq, Instant::now()));
                             // Bounded queue: drop excess video frames under overload,
                             // never pause voice or fill the system UDP receive buffer.
                             let _ = jpeg_tx.try_send((id, jpeg, was_recovered));
@@ -360,7 +369,7 @@ impl VideoSession {
                     }
                 }
                 partial.retain(|_,a|a.updated.elapsed() < Duration::from_millis(800));
-                completed.retain(|_, (_,_,time)| time.elapsed() < Duration::from_secs(2));
+                completed.retain(|_, (_,_,_,time)| time.elapsed() < Duration::from_secs(2));
             }
         });
         Ok(Self {
@@ -430,14 +439,14 @@ mod tests {
     #[test]
     fn fragments_roundtrip_and_out_of_order() {
         let jpg = (0..10_987).map(|i| (i % 251) as u8).collect::<Vec<_>>();
-        let parts = make_fragments(7654, 99, &jpg).unwrap();
+        let parts = make_fragments(7654, 81, 99, &jpg).unwrap();
         assert!(parts.len()>2);
         let total = parts.len() - 1;
-        let mut assembly = Assembly::new(99, total);
+        let mut assembly = Assembly::new(81, 99, total);
         let mut result = None;
         for part in parts.iter().rev() {
-            let (id,seq,idx,count,payload) = parse_fragment(part).unwrap();
-            assert_eq!((id,seq,count),(7654,99,total));
+            let (id,session,seq,idx,count,payload) = parse_fragment(part).unwrap();
+            assert_eq!((id,session,seq,count),(7654,81,99,total));
             if let Some(done) = assembly.insert(idx,payload) { result = Some(done); }
         }
         assert_eq!(result.unwrap(),jpg);
@@ -446,14 +455,14 @@ mod tests {
     #[test]
     fn parity_recovers_one_lost_fragment_any_position() {
         let jpg = (0..17_777).map(|i| ((i * 17) % 251) as u8).collect::<Vec<_>>();
-        let fragments = make_fragments(45, 17, &jpg).unwrap();
+        let fragments = make_fragments(45, 81, 17, &jpg).unwrap();
         let total = fragments.len() - 1;
         for dropped in [0, total / 2, total - 1] {
-            let mut assembly = Assembly::new(17, total);
+            let mut assembly = Assembly::new(81, 17, total);
             let mut reconstructed = None;
             for (i, fragment) in fragments.iter().enumerate().rev() {
                 if i == dropped { continue; }
-                let (_, _, part, _, payload) = parse_fragment(fragment).unwrap();
+                let (_, _, _, part, _, payload) = parse_fragment(fragment).unwrap();
                 if let Some(bytes) = assembly.insert(part, payload) {
                     reconstructed = Some(bytes);
                 }
@@ -465,21 +474,30 @@ mod tests {
 
     #[test]
     fn parity_does_not_claim_to_recover_two_missing_packets() {
-        let fragments = make_fragments(45, 17, &vec![7u8; 9_999]).unwrap();
+        let fragments = make_fragments(45, 81, 17, &vec![7u8; 9_999]).unwrap();
         let total = fragments.len() - 1;
-        let mut assembly = Assembly::new(17, total);
+        let mut assembly = Assembly::new(81, 17, total);
         for (i, fragment) in fragments.iter().enumerate() {
             if i < 2 { continue; }
-            let (_, _, part, _, payload) = parse_fragment(fragment).unwrap();
+            let (_, _, _, part, _, payload) = parse_fragment(fragment).unwrap();
             assert!(assembly.insert(part, payload).is_none());
         }
     }
     #[test]
+    fn camera_sessions_are_distinct_even_when_sequences_restart() {
+        let first = make_fragments(9, 100, 0, &[1; 1000]).unwrap();
+        let next = make_fragments(9, 200, 0, &[1; 1000]).unwrap();
+        let (_, first_session, first_seq, _, _, _) = parse_fragment(&first[0]).unwrap();
+        let (_, next_session, next_seq, _, _, _) = parse_fragment(&next[0]).unwrap();
+        assert_ne!(first_session, next_session);
+        assert_eq!(first_seq, next_seq);
+    }
+    #[test]
     fn reject_oversized_bad_packets() {
-        assert!(make_fragments(2,1,&vec![0;MAX_JPEG_BYTES+1]).is_none());
+        assert!(make_fragments(2,81,1,&vec![0;MAX_JPEG_BYTES+1]).is_none());
         assert!(parse_fragment(&[MAGIC,0]).is_none());
-        let mut bytes = make_fragments(1, 1, &[3; 16]).unwrap().remove(0);
-        bytes[14]=0;
+        let mut bytes = make_fragments(1, 81, 1, &[3; 16]).unwrap().remove(0);
+        bytes[22]=0;
         assert!(parse_fragment(&bytes).is_none());
     }
 }
