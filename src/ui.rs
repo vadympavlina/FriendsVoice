@@ -547,6 +547,27 @@ impl FriendsApp {
                                 .size(11.0).color(RED));
                         }
                     }
+                    if let Some(voice) = &self.voice {
+                        let speaking: Vec<_> = self.peers.iter().filter(|p| p.voice).collect();
+                        if !speaking.is_empty() {
+                            ui.add_space(11.0);
+                            section(ui, "ГУЧНІСТЬ КОЖНОГО ДРУГА");
+                            for peer in speaking {
+                                ui.label(RichText::new(&peer.name).size(12.0).color(BRIGHT));
+                                let mut gain = voice.per_peer_volumes.lock().ok()
+                                    .and_then(|levels| levels.get(&peer.id).copied())
+                                    .unwrap_or(1.0);
+                                let volume_label = format!("{:.0}%", gain * 100.0);
+                                if ui.add(egui::Slider::new(&mut gain, 0.0..=2.0)
+                                    .text(volume_label)).changed() {
+                                    if let Ok(mut levels) = voice.per_peer_volumes.lock() {
+                                        levels.insert(peer.id, gain);
+                                    }
+                                }
+                            }
+                            ui.label(text_caption("0% — не чути друга, 100% — звичайна гучність."));
+                        }
+                    }
                     ui.label(text_caption("Після зміни аудіопристрою перезайди у голосовий канал."));
                     ui.add_space(9.0);
                     if tinted_button(ui,"Зберегти налаштування",PURPLE,true,33.0).clicked(){
@@ -559,10 +580,44 @@ impl FriendsApp {
                     section(ui,"ВІДЕО ТА ЕКРАН");
                     card().show(ui,|ui|{
                         ui.label(RichText::new("Камера · P2P Beta").strong().color(BRIGHT));
-                        ui.label(RichText::new("Легкий режим: 320×180, до 6 FPS, JPEG через UDP 45890.")
+                        ui.label(RichText::new("Три режими якості. Статичні кадри передаються рідше, щоб берегти трафік.")
                             .size(12.0).color(SOFT));
-                        ui.label(RichText::new("Камера не вмикається автоматично: тільки після твоєї дії.")
-                            .size(11.0).color(SOFT));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Джерело відео").size(12.0).color(BRIGHT));
+                        let previous_index = self.camera_index.load(Ordering::Relaxed);
+                        let mut chosen_index = previous_index;
+                        egui::ComboBox::from_id_salt("fv_cam_select")
+                            .width(ui.available_width() - 8.0)
+                            .selected_text(format!("Камера {}", chosen_index + 1))
+                            .show_ui(ui, |ui| {
+                                for index in 0..4u32 {
+                                    ui.selectable_value(&mut chosen_index, index, format!("Камера {}", index + 1));
+                                }
+                            });
+                        if chosen_index != previous_index {
+                            self.update_camera_device(chosen_index);
+                        }
+                        ui.label(text_caption("Вибери номер пристрою. Якщо камера не відкриється, спробуй інший номер."));
+                        ui.add_space(7.0);
+                        ui.label(RichText::new("Якість відео").size(12.0).color(BRIGHT));
+                        let original_quality = self.video_quality.load(Ordering::Relaxed);
+                        let mut selected_quality = original_quality;
+                        let quality_label = match original_quality {
+                            0 => "Економія · 320×180 / 5 FPS",
+                            2 => "Чіткіше · 480×270 / 8 FPS",
+                            _ => "Баланс · 320×180 / 9 FPS",
+                        };
+                        egui::ComboBox::from_id_salt("fv_video_quality")
+                            .width(ui.available_width() - 8.0)
+                            .selected_text(quality_label)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut selected_quality, 0, "Економія · 320×180 / 5 FPS");
+                                ui.selectable_value(&mut selected_quality, 1, "Баланс · 320×180 / 9 FPS");
+                                ui.selectable_value(&mut selected_quality, 2, "Чіткіше · 480×270 / 8 FPS");
+                            });
+                        if selected_quality != original_quality { self.update_video_quality(selected_quality); }
+                        ui.add_space(8.0);
+                        ui.label(text_caption("Камера вмикається лише вручну. Потрібен вхід у голосовий канал."));
                         let on=self.video.as_ref().is_some_and(|v|v.enabled());
                         if tinted_button(ui,
                             if on{"Вимкнути камеру"}else{"Увімкнути камеру"},
@@ -608,7 +663,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.5 · Камера + Push-to-Talk"));
+                    ui.label(text_title("Версія 0.6 · Quality Edition"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
