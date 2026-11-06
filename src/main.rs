@@ -2,8 +2,9 @@
 mod mesh;
 mod protocol;
 mod voice;
+mod ui;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 use mesh::{Mesh, MeshEvent, PeerView};
 use protocol::{CONTROL_PORT, MAX_NODES};
 use serde::{Deserialize, Serialize};
@@ -16,9 +17,9 @@ use std::{
 };
 use voice::VoiceSession;
 
-const BACKGROUND: Color32 = Color32::from_rgb(23, 25, 36);
-const SIDEBAR: Color32 = Color32::from_rgb(16, 18, 29);
-const ACCENT: Color32 = Color32::from_rgb(103, 116, 246);
+const BACKGROUND: Color32 = Color32::from_rgb(19, 21, 37);
+const SIDEBAR: Color32 = Color32::from_rgb(15, 17, 33);
+const PURPLE: Color32 = Color32::from_rgb(139, 93, 255);
 const MUTED: Color32 = Color32::from_rgb(152, 159, 178);
 const GREEN: Color32 = Color32::from_rgb(65, 214, 160);
 const RED: Color32 = Color32::from_rgb(245, 98, 115);
@@ -97,6 +98,7 @@ pub struct FriendsApp {
     input_devices: Vec<String>,
     output_devices: Vec<String>,
     settings_open: bool,
+    settings_page: usize,
 }
 
 impl Default for FriendsApp {
@@ -125,7 +127,8 @@ impl Default for FriendsApp {
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
-            settings_open: false,
+            settings_open: true,
+            settings_page: 0,
         }
     }
 }
@@ -229,208 +232,7 @@ impl FriendsApp {
         }
     }
 
-    fn sidebar(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        ui.heading(RichText::new("◉ Friends Voice").size(21.0).color(Color32::WHITE));
-        ui.label(RichText::new("SERVERLESS · RADMIN VPN").size(10.0).color(MUTED));
-        ui.add_space(20.0);
 
-        ui.label(RichText::new("СТАН МЕРЕЖІ").size(11.0).strong().color(MUTED));
-        if self.mesh.is_some() {
-            ui.label(RichText::new("● P2P вузол працює").color(GREEN).strong());
-        } else {
-            ui.label(RichText::new("● Помилка P2P вузла").color(RED));
-            if let Some(message) = &self.network_error {
-                ui.label(RichText::new(message).size(11.0).color(RED));
-            }
-            if ui.button("Повторити запуск").clicked() { self.retry_network(); }
-        }
-        let ips = self.mesh.as_ref().map(|m| m.local_radmin_ips.as_slice()).unwrap_or(&[]);
-        if ips.is_empty() {
-            ui.label(RichText::new("Radmin IP не знайдено. Перевір VPN і перезапусти програму.")
-                .size(11.0).color(MUTED));
-        } else {
-            for ip in ips {
-                ui.label(RichText::new(format!("Твій IP: {ip}")).size(12.0).color(MUTED));
-            }
-        }
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        ui.label(RichText::new("ГОЛОСОВИЙ КАНАЛ").size(11.0).strong().color(MUTED));
-        let joined = self.voice.is_some();
-        ui.label(RichText::new(if joined { "● Загальний · у голосі" } else { "◌ Загальний" })
-            .color(if joined { GREEN } else { Color32::LIGHT_GRAY }));
-        if ui.add_enabled(self.mesh.is_some(), egui::Button::new(
-            if joined { "Залишити голос" } else { "Приєднатися до голосу" }
-        ).fill(if joined { Color32::from_rgb(93, 45, 56) } else { ACCENT })).clicked() {
-            self.toggle_voice();
-        }
-        ui.add_space(12.0);
-        ui.separator();
-
-        ui.label(RichText::new(format!("ДРУЗІ В МЕРЕЖІ · {} / {}", self.peers.len() + 1, MAX_NODES))
-            .size(11.0).strong().color(MUTED));
-        ui.horizontal(|ui| {
-            ui.colored_label(GREEN, "●");
-            ui.label(RichText::new(format!("{} (ти)", self.settings.nickname)).strong());
-        });
-        for p in &self.peers {
-            ui.horizontal(|ui| {
-                ui.colored_label(GREEN, "●");
-                ui.label(&p.name);
-                if p.voice { ui.label(RichText::new("🎙").size(11.0)); }
-            });
-        }
-        ui.add_space(14.0);
-        ui.separator();
-        ui.label(RichText::new("ПОШУК ДРУЗІВ").size(11.0).strong().color(MUTED));
-        ui.label(RichText::new("Якщо автоматичний пошук не спрацював, додай IP друга один раз.")
-            .size(11.0).color(MUTED));
-        ui.add(egui::TextEdit::singleline(&mut self.friend_ip)
-            .hint_text("26.x.x.x").desired_width(f32::INFINITY));
-        if ui.add_enabled(self.mesh.is_some(),
-            egui::Button::new("Знайти за IP")).clicked() { self.add_friend(); }
-        ui.add_space(14.0);
-        ui.separator();
-        if ui.button("⚙ Налаштування звуку").clicked() {
-            self.settings_open = !self.settings_open;
-        }
-    }
-
-    fn settings_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(12.0);
-        ui.heading(RichText::new("Налаштування").size(18.0));
-        ui.separator();
-        ui.label("Нікнейм");
-        let changed = ui.add(egui::TextEdit::singleline(&mut self.settings.nickname)
-            .desired_width(f32::INFINITY)).changed();
-        if changed {
-            self.settings.nickname.truncate(48);
-            if let Some(mesh) = &self.mesh {
-                if !self.settings.nickname.trim().is_empty() && self.settings.nickname.chars().count() <= 24 {
-                    mesh.rename(self.settings.nickname.clone());
-                }
-            }
-        }
-        ui.add_space(9.0);
-        ui.label(RichText::new("МІКРОФОН").size(11.0).color(MUTED));
-        egui::ComboBox::from_id_salt("input_devices")
-            .width(ui.available_width() - 8.0)
-            .selected_text(if self.settings.input_device.is_empty() {
-                "За замовчуванням" } else { &self.settings.input_device })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.settings.input_device, String::new(), "За замовчуванням");
-                for device in &self.input_devices {
-                    ui.selectable_value(&mut self.settings.input_device, device.clone(), device);
-                }
-            });
-        ui.add_space(10.0);
-        ui.label(RichText::new("НАВУШНИКИ / ДИНАМІКИ").size(11.0).color(MUTED));
-        egui::ComboBox::from_id_salt("output_devices")
-            .width(ui.available_width() - 8.0)
-            .selected_text(if self.settings.output_device.is_empty() {
-                "За замовчуванням" } else { &self.settings.output_device })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.settings.output_device, String::new(), "За замовчуванням");
-                for device in &self.output_devices {
-                    ui.selectable_value(&mut self.settings.output_device, device.clone(), device);
-                }
-            });
-        if ui.button("↻ Оновити пристрої").clicked() {
-            self.input_devices = voice::list_input_devices();
-            self.output_devices = voice::list_output_devices();
-        }
-        ui.add_space(10.0);
-        let mut volume = f32::from_bits(self.volume.load(Ordering::Relaxed)).clamp(0.0, 2.0);
-        if ui.add(egui::Slider::new(&mut volume, 0.0..=2.0).text("Гучність")).changed() {
-            self.volume.store(volume.to_bits(), Ordering::Relaxed);
-        }
-        ui.add_space(10.0);
-        ui.label(RichText::new("РІВЕНЬ МІКРОФОНА").size(11.0).color(MUTED));
-        let rms = self.voice.as_ref().map(|s|
-            f32::from_bits(s.microphone_level.load(Ordering::Relaxed))
-        ).unwrap_or(0.0).clamp(0.0, 1.0);
-        ui.add(egui::ProgressBar::new((rms * 7.0).min(1.0)).desired_width(ui.available_width()));
-        ui.label(RichText::new("Після зміни пристроїв перезайди в голос.")
-            .size(11.0).color(MUTED));
-        if ui.button("Зберегти налаштування").clicked() {
-            self.settings.volume = volume;
-            save_settings(&self.settings);
-            self.notice("Налаштування збережено.");
-        }
-        ui.add_space(17.0);
-        ui.separator();
-        ui.label(RichText::new("ВІДЕО ТА ДЕМОНСТРАЦІЯ ЕКРАНА")
-            .size(11.0).color(MUTED).strong());
-        ui.label(RichText::new("Поки в розробці. Ця збірка перевіряє повністю незалежний голос і чат.")
-            .size(12.0).color(MUTED));
-    }
-
-    fn chat_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("# загальний").size(21.0).color(Color32::WHITE));
-            ui.label(RichText::new("Приватний чат · Без сервера").color(MUTED));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new("Friends Voice 0.3").color(MUTED));
-            });
-        });
-        ui.add_space(8.0);
-        ui.separator();
-        let height = (ui.available_height() - 96.0).max(100.0);
-        egui::ScrollArea::vertical().max_height(height)
-            .stick_to_bottom(true).auto_shrink([false,false])
-            .show(ui, |ui| {
-                ui.set_min_height(height);
-                for msg in &self.messages {
-                    if msg.system {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(format!("◆ {}", msg.text)).size(12.0).color(MUTED));
-                    } else {
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.colored_label(if msg.name == self.settings.nickname { ACCENT } else { GREEN }, "●");
-                            ui.label(RichText::new(&msg.name).strong());
-                        });
-                        ui.indent(format!("{}{}", msg.name, msg.text), |ui| {
-                            ui.label(RichText::new(&msg.text).size(14.0));
-                        });
-                    }
-                }
-            });
-        ui.separator();
-        ui.horizontal(|ui| {
-            let available = (ui.available_width() - 100.0).max(120.0);
-            let edit = ui.add_enabled(self.mesh.is_some(),
-                egui::TextEdit::singleline(&mut self.draft)
-                .hint_text("Повідомлення друзям…").desired_width(available));
-            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.send_chat();
-            }
-            if ui.add_enabled(self.mesh.is_some(), egui::Button::new("Надіслати").fill(ACCENT)).clicked() {
-                self.send_chat();
-            }
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if self.voice.is_some() {
-                let mic = self.mic_enabled.load(Ordering::Relaxed);
-                if ui.add(egui::Button::new(if mic { "🎙 Мікрофон увімкнено" } else { "🔇 Мікрофон вимкнено" })
-                    .fill(if mic { Color32::from_rgb(35, 103, 75) } else { RED })).clicked() {
-                    self.mic_enabled.store(!mic, Ordering::Relaxed);
-                }
-                let deaf = self.deafened.load(Ordering::Relaxed);
-                if ui.button(if deaf { "Увімкнути звук" } else { "Вимкнути звук" }).clicked() {
-                    self.deafened.store(!deaf, Ordering::Relaxed);
-                }
-                ui.label(RichText::new("Ctrl+M — мікрофон").size(11.0).color(MUTED));
-            } else {
-                ui.label(RichText::new("🎧 Натисни «Приєднатися до голосу», коли захочеш поговорити.")
-                    .size(12.0).color(MUTED));
-            }
-        });
-    }
 }
 
 impl eframe::App for FriendsApp {
@@ -441,17 +243,18 @@ impl eframe::App for FriendsApp {
             self.mic_enabled.store(!mic, Ordering::Relaxed);
         }
         ctx.request_repaint_after(Duration::from_millis(100));
-        egui::SidePanel::left("sidebar").resizable(false).exact_width(250.0)
-            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(12.0))
-            .show(ctx, |ui| self.sidebar(ui));
+        egui::SidePanel::left("sidebar").resizable(false).exact_width(291.0)
+            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
+            .show(ctx, |ui| self.neon_sidebar(ui));
         if self.settings_open {
-            egui::SidePanel::right("settings").resizable(false).exact_width(275.0)
+            egui::SidePanel::right("settings").resizable(false).default_width(290.0)
+                .width_range(250.0..=330.0)
                 .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
-                .show(ctx, |ui| self.settings_panel(ui));
+                .show(ctx, |ui| self.neon_settings(ui));
         }
         egui::CentralPanel::default().frame(
-            egui::Frame::none().fill(BACKGROUND).inner_margin(17.0)
-        ).show(ctx, |ui| self.chat_panel(ui));
+            egui::Frame::none().fill(BACKGROUND).inner_margin(16.0)
+        ).show(ctx, |ui| self.neon_main(ui));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -465,20 +268,25 @@ impl eframe::App for FriendsApp {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([830.0, 500.0]),
+            .with_inner_size([1520.0, 865.0])
+            .with_min_inner_size([1060.0, 660.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.3 — P2P", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.4 — Neon P2P", options, Box::new(|cc| {
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;
-        visual.widgets.inactive.bg_fill = Color32::from_rgb(43, 47, 63);
-        visual.widgets.hovered.bg_fill = Color32::from_rgb(63, 68, 91);
+        visual.widgets.inactive.bg_fill = Color32::from_rgb(39, 44, 69);
+        visual.widgets.hovered.bg_fill = Color32::from_rgb(67, 69, 108);
+        visual.widgets.active.bg_fill = Color32::from_rgb(88, 79, 171);
+        visual.selection.bg_fill = PURPLE.linear_multiply(0.45);
         cc.egui_ctx.set_visuals(visual);
         cc.egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-            style.spacing.button_padding = egui::vec2(12.0, 7.0);
+            style.spacing.item_spacing = egui::vec2(9.0, 8.0);
+            style.spacing.button_padding = egui::vec2(11.0, 7.0);
+            style.visuals.widgets.inactive.rounding = egui::Rounding::same(9.0);
+            style.visuals.widgets.hovered.rounding = egui::Rounding::same(9.0);
+            style.visuals.widgets.active.rounding = egui::Rounding::same(9.0);
         });
         Ok(Box::new(FriendsApp::default()))
     }))
