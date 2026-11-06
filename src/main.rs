@@ -163,24 +163,35 @@ fn network_worker(
         }
         let _ = stream.shutdown(Shutdown::Both);
     });
-    let _ = reader.get_ref().set_read_timeout(Some(Duration::from_millis(250)));
-    while awake.load(Ordering::Relaxed) {
+    // A short read timeout on Windows may abort a quiet connection, even though it is alive.
+    // Keep the established TCP socket in blocking mode. The writer thread explicitly shuts
+    // down its clone when the user disconnects, so this read unblocks without polling timeouts.
+    if let Err(error) = reader.get_ref().set_read_timeout(None) {
+        let _ = send_events.send(Event::Disconnected(format!("Помилка TCP: {error}")));
+        awake.store(false, Ordering::Relaxed);
+        return;
+    }
+    let reason = loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(n) if n > 8192 => break,
+            Ok(0) => break "Сервер закрив TCP-з'єднання".to_string(),
+            Ok(n) if n > 8192 => break "Сервер надіслав завеликий пакет".to_string(),
             Ok(_) => {
-                if let Ok(packet) = serde_json::from_str::<Packet>(&line) {
-                    let _ = send_events.send(Event::Packet(packet));
+                match serde_json::from_str::<Packet>(&line) {
+                    Ok(packet) => {
+                        let _ = send_events.send(Event::Packet(packet));
+                    }
+                    Err(error) => {
+                        break format!("Некоректний пакет від сервера: {error}");
+                    }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut ||
-                e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => break format!("Помилка читання TCP: {error}"),
         }
-    }
+    };
     if awake.swap(false, Ordering::Relaxed) {
-        let _ = send_events.send(Event::Disconnected("З'єднання із сервером завершено".into()));
+        let _ = send_events.send(Event::Disconnected(reason));
     }
 }
 

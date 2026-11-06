@@ -126,15 +126,21 @@ fn handle(mut stream: TcpStream, id: u64, peers: Peers, password: String) {
             if write_packet(&mut writer, &packet).is_err() { break; }
         }
     });
-    let _ = stream.set_read_timeout(None);
+    // Revert the authorization timeout on the actual reader socket as well as the
+    // writer clone. Connected users may stay idle without sending chat messages.
+    if let Err(error) = reader.get_ref().set_read_timeout(None) {
+        eprintln!("TCP timeout reset failed for {name}: {error}");
+        peers.lock().unwrap().remove(&id);
+        return;
+    }
     println!("Joined: {name} (id={id})");
     broadcast(&peers, Packet::Notice { text: format!("{name} приєднався(-лася)") });
     publish_users(&peers);
-    loop {
+    let reason = loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(n) if n > 8192 => break,
+            Ok(0) => break "client closed connection".to_string(),
+            Ok(n) if n > 8192 => break "packet exceeded size limit".to_string(),
             Ok(_) => {
                 if let Ok(Packet::SendChat { text }) = serde_json::from_str::<Packet>(&line) {
                     let text = text.trim();
@@ -143,12 +149,14 @@ fn handle(mut stream: TcpStream, id: u64, peers: Peers, password: String) {
                     }
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => break format!("TCP read error: {error}"),
         }
-    }
+    };
     peers.lock().unwrap().remove(&id);
     broadcast(&peers, Packet::Notice { text: format!("{name} вийшов(-ла)") });
     publish_users(&peers);
-    println!("Left: {name} (id={id})");
+    println!("Left: {name} (id={id}): {reason}");
 }
 
 fn main() -> std::io::Result<()> {

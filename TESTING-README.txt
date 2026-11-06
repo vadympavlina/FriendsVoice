@@ -1,4 +1,4 @@
-FRIENDS VOICE 0.2 - WINDOWS X64
+FRIENDS VOICE 0.2.1 - WINDOWS X64
 =============================
 
 Files:
@@ -27,7 +27,7 @@ Do NOT expose these ports to the public internet.
 If your mic doesn't start, open audio settings and select a 48 kHz-capable device.
 Audio devices require F32 format at 48 kHz in this release.
 
-WHAT'S NEW
+FIXED IN 0.2.1\n- More reliable TCP connections while voice chat is active or idle.\n- More specific disconnect message in the client.\n- Server now logs why a client disconnected.\n\nWHAT'S NEW
 - Native real-time voice calls with Opus codec, private UDP relay for up to 5 people.
 - Mute / deafen, mic meter, volume, Ctrl+M shortcut, input/output choice.
 - Redesigned dark interface, remembered address, nickname and device settings.

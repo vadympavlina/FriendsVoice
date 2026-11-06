@@ -1,4 +1,4 @@
-# Friends Voice 0.2 — приватний Discord для друзів
+# Friends Voice 0.2.1 — приватний Discord для друзів
 
 Native Windows 10/11 desktop app in **Rust**, with **Radmin VPN**, max **five friends**. No Electron, no public server, no hosting bill.
 
@@ -6,7 +6,7 @@ Native Windows 10/11 desktop app in **Rust**, with **Radmin VPN**, max **five fr
 
 Open [GitHub Releases](https://github.com/vadympavlina/FriendsVoice/releases). Download **FriendsVoice-Windows-x64.zip** from the newest successful test release; extract and run the included executables. You do **not** need Rust, Visual Studio, Cargo or a local compiler.
 
-## Main features
+## Stability improvements in v0.2.1\n\n- Established TCP connections now use blocking reads without a short timeout; clean shutdown happens through the writer socket.\n- The client reports whether the server closed the connection, sent bad data, or caused a socket error.\n- The server logs a specific reason when each user disconnects.\n- A new idle-connection regression test runs before the voice-relay test.\n\n## Main features
 
 - Modern dark UI on `egui`.
 - Native voice chat: capture/playback via WASAPI (`cpal`) and compressed Opus audio (48 kHz mono, 20 ms frames).

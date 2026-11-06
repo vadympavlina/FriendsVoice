@@ -61,7 +61,10 @@ fn server_chat_and_authenticated_voice_relay() {
     let _server = Server(process);
 
     let (mut a, mut reader_a, id_a, token_a) = login(port, "Alice");
-    let (_b, mut reader_b, id_b, token_b) = login(port, "Bob");
+    let (_b, reader_b, id_b, token_b) = login(port, "Bob");
+    // Leave both clients idle for longer than the old 250ms client socket timeout.
+    // Both must stay logged in and still exchange chat afterwards.
+    thread::sleep(Duration::from_secs(2));
     assert_ne!(id_a, id_b);
     assert_ne!(token_a, token_b);
 
