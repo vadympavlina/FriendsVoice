@@ -564,9 +564,11 @@ impl FriendsApp {
                         });
                     }
                     if self.peers.is_empty() {
-                        ui.add_space(9.0);
-                        ui.label(RichText::new("Тут з'являться твої друзі.")
-                            .size(11.5).color(MUTED));
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Кімната готова до зустрічі!")
+                            .size(12.0).strong().color(BRIGHT));
+                        ui.label(RichText::new("Запроси друга до тієї самої мережі Radmin VPN.")
+                            .size(11.3).color(SOFT));
                     }
                 });
 
@@ -590,6 +592,12 @@ impl FriendsApp {
                                 ui.label(RichText::new(ip.to_string()).size(12.6)
                                     .strong().color(BRIGHT));
                             });
+                        }
+                        ui.add_space(7.0);
+                        if outline_button(ui,"Скопіювати мій VPN IP"){
+                            if let Some(ip) = ips.first() {
+                                ui.output_mut(|o| o.copied_text = ip.to_string());
+                            }
                         }
                     }
                 });
@@ -1057,6 +1065,11 @@ impl FriendsApp {
                                 true,self.settings_open,false,37.0){
                                 self.settings_open=!self.settings_open;
                             }
+                            if icon_button(ui,"Гарячі клавіші",Glyph::Keyboard,
+                                true,false,false,37.0){
+                                self.settings_open=true;
+                                self.settings_page=2;
+                            }
                             if icon_button(ui,"Театральний режим · Ctrl+E",Glyph::Focus,
                                 true,self.focus_mode,false,37.0){
                                 self.focus_mode=!self.focus_mode;
@@ -1169,6 +1182,28 @@ impl FriendsApp {
                     }
                 });
 
+            if self.peers.is_empty() && !self.focus_mode {
+                ui.add_space(8.0);
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(33,43,69))
+                    .stroke(Stroke::new(1.0,BORDER))
+                    .rounding(Rounding::same(13.0))
+                    .inner_margin(egui::Margin::symmetric(13.0,9.0))
+                    .show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            ui.label(RichText::new("Запроси друзів через Radmin VPN")
+                                .size(11.2).strong().color(SOFT));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                if ui.add(egui::Button::new(
+                                    RichText::new("Додати друга").size(11.2).color(BRIGHT))
+                                    .fill(Color32::from_rgb(64,80,128))
+                                    .rounding(Rounding::same(9.0))).clicked() {
+                                    self.sidebar_open=true;
+                                }
+                            });
+                        });
+                    });
+            }
             ui.add_space(12.0);
             // In Focus Mode, video takes priority. Chat remains one click away.
             if self.focus_mode {
