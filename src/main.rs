@@ -37,6 +37,8 @@ struct Settings {
     volume: f32,
     push_to_talk: bool,
     ptt_key: i32,
+    camera_index: u32,
+    video_quality: u32,
 }
 
 impl Default for Settings {
@@ -49,6 +51,8 @@ impl Default for Settings {
             volume: 1.0,
             push_to_talk: false,
             ptt_key: voice::PTT_VK,
+            camera_index: 0,
+            video_quality: 1,
         }
     }
 }
@@ -105,6 +109,8 @@ pub struct FriendsApp {
     mic_enabled: Arc<AtomicBool>,
     push_to_talk: Arc<AtomicBool>,
     ptt_key: Arc<AtomicI32>,
+    camera_index: Arc<AtomicU32>,
+    video_quality: Arc<AtomicU32>,
     deafened: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
     input_devices: Vec<String>,
@@ -118,6 +124,8 @@ impl Default for FriendsApp {
         let settings = load_settings();
         let saved_ptt = settings.push_to_talk;
         let saved_ptt_key = settings.ptt_key;
+        let saved_camera_index = settings.camera_index.min(3);
+        let saved_video_quality = settings.video_quality.min(2);
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
         let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
             Ok(mesh) => (Some(mesh), None),
@@ -143,6 +151,8 @@ impl Default for FriendsApp {
             mic_enabled: Arc::new(AtomicBool::new(true)),
             push_to_talk: Arc::new(AtomicBool::new(saved_ptt)),
             ptt_key: Arc::new(AtomicI32::new(saved_ptt_key)),
+            camera_index: Arc::new(AtomicU32::new(saved_camera_index)),
+            video_quality: Arc::new(AtomicU32::new(saved_video_quality)),
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
@@ -251,7 +261,10 @@ impl FriendsApp {
             Ok(voice) => {
                 self.voice = Some(voice);
                 mesh.voice(true);
-                match VideoSession::start(mesh.id, Arc::clone(&mesh.voice_targets)) {
+                match VideoSession::start(
+                    mesh.id, Arc::clone(&mesh.voice_targets),
+                    Arc::clone(&self.camera_index), Arc::clone(&self.video_quality),
+                ) {
                     Ok(video) => self.video = Some(video),
                     Err(error) => self.notice(format!("Відео недоступне: {error}. Голос працює.")),
                 }
@@ -273,6 +286,26 @@ impl FriendsApp {
             }
             None => self.notice("Спочатку зайди у голосовий канал."),
         }
+    }
+    fn update_camera_device(&mut self, index: u32) {
+        let index = index.min(3);
+        self.camera_index.store(index, Ordering::Relaxed);
+        self.settings.camera_index = index;
+        save_settings(&self.settings);
+        if let Some(video) = self.video.as_mut() {
+            if video.enabled() {
+                video.disable();
+                video.enable();
+                self.video_textures.clear();
+                self.video_seen.clear();
+            }
+        }
+    }
+    fn update_video_quality(&mut self, quality: u32) {
+        let quality = quality.min(2);
+        self.video_quality.store(quality, Ordering::Relaxed);
+        self.settings.video_quality = quality;
+        save_settings(&self.settings);
     }
 
     fn poll_video(&mut self, ctx: &egui::Context) {
@@ -347,7 +380,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([1060.0, 660.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.5 — Camera & PTT", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.6 — Quality Edition", options, Box::new(|cc| {
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;
