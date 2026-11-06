@@ -8,25 +8,21 @@ mod branding;
 
 use eframe::egui::{self, Color32};
 use mesh::{Mesh, MeshEvent, PeerView};
-use protocol::{CONTROL_PORT, MAX_NODES, PROTOCOL_VERSION};
+use protocol::{CONTROL_PORT, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
-    sync::{atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering}, Arc},
+    sync::{atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering}, Arc, Mutex},
     time::{Duration, Instant},
 };
 use voice::VoiceSession;
 use video::{VideoSession, VideoEvent};
 
-const BACKGROUND: Color32 = Color32::from_rgb(14, 19, 34);
-const SIDEBAR: Color32 = Color32::from_rgb(19, 24, 42);
-const PURPLE: Color32 = Color32::from_rgb(148, 108, 250);
-const MUTED: Color32 = Color32::from_rgb(152, 159, 178);
-const GREEN: Color32 = Color32::from_rgb(69, 216, 166);
-const RED: Color32 = Color32::from_rgb(245, 98, 115);
+
+const MAX_CAMERA_INDEX: u32 = 15;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -59,6 +55,32 @@ impl Default for Settings {
             noise_gate: false, // Opt-in: never silently clip quiet microphones.
             gate_threshold: 0.018,
         }
+    }
+}
+
+/// Flips tightly packed RGB rows left to right.
+fn mirror_horizontally(rgb: &mut [u8], width: usize) {
+    if width == 0 { return; }
+    for row in rgb.chunks_exact_mut(width * 3) {
+        for x in 0..width / 2 {
+            let (left, right) = (x * 3, (width - 1 - x) * 3);
+            for c in 0..3 { row.swap(left + c, right + c); }
+        }
+    }
+}
+
+#[cfg(test)]
+mod mirror_tests {
+    use super::mirror_horizontally;
+    #[test]
+    fn mirror_swaps_pixels_in_each_row_only() {
+        // Two rows of three pixels: [A B C] [D E F]
+        let mut data: Vec<u8> = (0..18).collect();
+        mirror_horizontally(&mut data, 3);
+        assert_eq!(&data[..9], &[6, 7, 8, 3, 4, 5, 0, 1, 2]);
+        assert_eq!(&data[9..], &[15, 16, 17, 12, 13, 14, 9, 10, 11]);
+        mirror_horizontally(&mut data, 3);
+        assert_eq!(data, (0..18).collect::<Vec<u8>>());
     }
 }
 
@@ -105,6 +127,8 @@ struct ChatEntry {
     name: String,
     text: String,
     system: bool,
+    /// How many identical consecutive system notices were folded into this one.
+    repeat: u32,
 }
 
 pub struct FriendsApp {
@@ -140,6 +164,11 @@ pub struct FriendsApp {
     chat_unread: usize,
     voice_started_at: Option<Instant>,
     last_notice: Option<(String, Instant)>,
+    add_friend_open: bool,
+    ip_copied_at: Option<Instant>,
+    /// Cameras reported by Windows as `(index, name)`; filled by a background thread.
+    cameras: Arc<Mutex<Vec<(u32, String)>>>,
+    cameras_loading: Arc<AtomicBool>,
 }
 
 impl Default for FriendsApp {
@@ -147,7 +176,7 @@ impl Default for FriendsApp {
         let settings = load_settings();
         let saved_ptt = settings.push_to_talk;
         let saved_ptt_key = settings.ptt_key;
-        let saved_camera_index = settings.camera_index.min(3);
+        let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
         let saved_video_quality = settings.video_quality.min(2);
         let saved_noise_gate = settings.noise_gate;
         let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
@@ -156,7 +185,7 @@ impl Default for FriendsApp {
             Ok(mesh) => (Some(mesh), None),
             Err(error) => (None, Some(error)),
         };
-        Self {
+        let app = Self {
             volume: Arc::new(AtomicU32::new(settings.volume.clamp(0.0, 2.0).to_bits())),
             settings,
             mesh,
@@ -168,6 +197,7 @@ impl Default for FriendsApp {
                 name: String::new(),
                 text: "Friends Voice працює без сервера! Друзі з однієї мережі Radmin VPN можуть знайти одне одного автоматично. Якщо ні — додай IP друга один раз.".into(),
                 system: true,
+                repeat: 1,
             }],
             voice: None,
             video: None,
@@ -193,7 +223,13 @@ impl Default for FriendsApp {
             chat_unread: 0,
             voice_started_at: None,
             last_notice: None,
-        }
+            add_friend_open: false,
+            ip_copied_at: None,
+            cameras: Arc::new(Mutex::new(Vec::new())),
+            cameras_loading: Arc::new(AtomicBool::new(false)),
+        };
+        app.refresh_cameras();
+        app
     }
 }
 
@@ -201,7 +237,14 @@ impl FriendsApp {
     fn notice(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.last_notice = Some((text.clone(), Instant::now()));
-        self.messages.push(ChatEntry { name: String::new(), text, system: true });
+        // Fold identical consecutive notices instead of flooding the chat.
+        if let Some(last) = self.messages.last_mut() {
+            if last.system && last.text == text {
+                last.repeat = last.repeat.saturating_add(1);
+                return;
+            }
+        }
+        self.messages.push(ChatEntry { name: String::new(), text, system: true, repeat: 1 });
         if self.messages.len() > 600 { self.messages.remove(0); }
     }
 
@@ -226,7 +269,7 @@ impl FriendsApp {
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
                     if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
-                    self.messages.push(ChatEntry { name, text, system: false });
+                    self.messages.push(ChatEntry { name, text, system: false, repeat: 1 });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
                 MeshEvent::LearnedAddress(address) => self.remember_ip(address),
@@ -303,11 +346,18 @@ impl FriendsApp {
                 self.voice = Some(voice);
                 self.voice_started_at = Some(Instant::now());
                 mesh.voice(true);
+                // A camera preview opened from Settings has no send targets; replace
+                // it with a real session and carry the camera state over.
+                let camera_was_on = self.video.as_ref().is_some_and(|v| v.enabled());
+                self.video = None;
                 match VideoSession::start(
                     mesh.id, Arc::clone(&mesh.voice_targets),
                     Arc::clone(&self.camera_index), Arc::clone(&self.video_quality),
                 ) {
-                    Ok(video) => self.video = Some(video),
+                    Ok(mut video) => {
+                        if camera_was_on { video.enable(); }
+                        self.video = Some(video);
+                    }
                     Err(error) => self.notice(format!("Відео недоступне: {error}. Голос працює.")),
                 }
                 self.notice("Голос підключено напряму до друзів. Камеру можна вмикати окремо.");
@@ -316,25 +366,72 @@ impl FriendsApp {
         }
     }
 
+    /// Makes sure a video session exists. Outside a call it is a private preview:
+    /// it has no send targets, so nothing leaves this computer.
+    fn ensure_video(&mut self) -> bool {
+        if self.video.is_some() { return true; }
+        let Some(mesh) = &self.mesh else {
+            self.notice("Немає з'єднання з мережею, камера недоступна.");
+            return false;
+        };
+        let targets = if self.voice.is_some() {
+            Arc::clone(&mesh.voice_targets)
+        } else {
+            Arc::new(Mutex::new(Vec::new()))
+        };
+        let id = mesh.id;
+        match VideoSession::start(id, targets,
+            Arc::clone(&self.camera_index), Arc::clone(&self.video_quality)) {
+            Ok(video) => { self.video = Some(video); true }
+            Err(error) => {
+                self.notice(format!("Відео недоступне: {error}"));
+                false
+            }
+        }
+    }
+
     fn toggle_camera(&mut self) {
-        match self.video.as_mut() {
-            Some(video) if video.enabled() => {
-                video.disable();
-                if let Some(mesh) = &self.mesh {
-                    self.video_textures.remove(&mesh.id);
-                    self.video_seen.remove(&mesh.id);
-                }
-                self.notice("Камеру вимкнено.");
+        if !self.ensure_video() { return; }
+        let in_call = self.voice.is_some();
+        let local_id = self.mesh.as_ref().map(|mesh| mesh.id);
+        let Some(video) = self.video.as_mut() else { return; };
+        if video.enabled() {
+            video.disable();
+            if let Some(id) = local_id {
+                self.video_textures.remove(&id);
+                self.video_seen.remove(&id);
             }
-            Some(video) => {
-                video.enable();
-                self.notice("Запуск камери… Windows може запросити дозвіл.");
-            }
-            None => self.notice("Спочатку зайди у голосовий канал."),
+            self.notice("Камеру вимкнено.");
+        } else {
+            video.enable();
+            self.notice(if in_call { "Запуск камери. Windows може попросити дозвіл." }
+                else { "Запуск камери для перегляду. Друзі її не бачать." });
+        }
+    }
+
+    fn refresh_cameras(&self) {
+        if self.cameras_loading.swap(true, Ordering::AcqRel) { return; }
+        let cameras = Arc::clone(&self.cameras);
+        let loading = Arc::clone(&self.cameras_loading);
+        std::thread::spawn(move || {
+            let found = video::list_cameras();
+            if let Ok(mut shared) = cameras.lock() { *shared = found; }
+            loading.store(false, Ordering::Release);
+        });
+    }
+
+    /// The preview camera must never stay on unnoticed: switch it off as soon as
+    /// the user is neither in a call nor looking at the camera settings.
+    fn stop_orphan_preview(&mut self) {
+        let watching = self.settings_open && self.settings_page == 1;
+        if self.voice.is_none() && !watching && self.video.is_some() {
+            self.video = None;
+            self.video_textures.clear();
+            self.video_seen.clear();
         }
     }
     fn update_camera_device(&mut self, index: u32) {
-        let index = index.min(3);
+        let index = index.min(MAX_CAMERA_INDEX);
         self.camera_index.store(index, Ordering::Relaxed);
         self.settings.camera_index = index;
         save_settings(&self.settings);
@@ -373,7 +470,12 @@ impl FriendsApp {
                 VideoEvent::Error(message) => self.notice(message),
             }
         }
-        for frame in latest.into_values() {
+        for mut frame in latest.into_values() {
+            // Your own preview is mirrored, like looking into a mirror. What is
+            // sent to friends is not mirrored.
+            if Some(frame.sender_id) == local_id {
+                mirror_horizontally(&mut frame.rgb, frame.width);
+            }
             let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
             if let Some(texture) = self.video_textures.get_mut(&frame.sender_id) {
                 texture.set(image, egui::TextureOptions::LINEAR);
@@ -396,6 +498,7 @@ impl FriendsApp {
 impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_events();
+        self.stop_orphan_preview();
         self.poll_video(ctx);
         let shortcuts = ctx.input(|i| {
             let ctrl = i.modifiers.ctrl && !i.modifiers.alt;
@@ -444,20 +547,7 @@ impl eframe::App for FriendsApp {
             180
         };
         ctx.request_repaint_after(Duration::from_millis(repaint_ms));
-        if self.sidebar_open {
-            egui::SidePanel::left("sidebar").resizable(false).exact_width(277.0)
-                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
-                .show(ctx, |ui| self.neon_sidebar(ui));
-        }
-        if self.settings_open {
-            egui::SidePanel::right("settings").resizable(true).default_width(305.0)
-                .width_range(275.0..=370.0)
-                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
-                .show(ctx, |ui| self.neon_settings(ui));
-        }
-        egui::CentralPanel::default().frame(
-            egui::Frame::none().fill(BACKGROUND).inner_margin(19.0)
-        ).show(ctx, |ui| self.neon_main(ui));
+        self.render(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -472,39 +562,13 @@ impl eframe::App for FriendsApp {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1500.0, 900.0])
-            .with_min_inner_size([1060.0, 690.0])
+            .with_inner_size([1400.0, 860.0])
+            .with_min_inner_size([960.0, 620.0])
             .with_icon(branding::icon()),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 1.0 — Aurora Studio", options, Box::new(|cc| {
-        // Use the native Windows UI font to ensure crisp Ukrainian text. If a
-        // Windows installation has no Segoe UI, keep egui's built-in fallback.
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "windows-ui".to_string(), egui::FontData::from_owned(bytes)
-            );
-            fonts.families.entry(egui::FontFamily::Proportional)
-                .or_default().insert(0,"windows-ui".to_string());
-            cc.egui_ctx.set_fonts(fonts);
-        }
-        let mut visual = egui::Visuals::dark();
-        visual.panel_fill = BACKGROUND;
-        visual.window_fill = BACKGROUND;
-        visual.widgets.inactive.bg_fill = Color32::from_rgb(34, 41, 70);
-        visual.widgets.hovered.bg_fill = Color32::from_rgb(61, 71, 114);
-        visual.widgets.active.bg_fill = Color32::from_rgb(111, 81, 182);
-        visual.selection.bg_fill = PURPLE.linear_multiply(0.45);
-        cc.egui_ctx.set_visuals(visual);
-        cc.egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(9.0, 8.0);
-            style.spacing.button_padding = egui::vec2(13.0, 8.0);
-            style.spacing.indent = 13.0;
-            style.visuals.widgets.inactive.rounding = egui::Rounding::same(10.0);
-            style.visuals.widgets.hovered.rounding = egui::Rounding::same(10.0);
-            style.visuals.widgets.active.rounding = egui::Rounding::same(10.0);
-        });
+    eframe::run_native("Friends Voice", options, Box::new(|cc| {
+        ui::install_theme(&cc.egui_ctx);
         Ok(Box::new(FriendsApp::default()))
     }))
 }

@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, 'dev/**', 'design/**', 'fix/**']
     tags: ['v*']
+  # Build and test the Windows app on pull requests before they are merged.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -57,12 +60,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-${{ github.run_number }}
-          name: Friends Voice - Test build ${{ github.run_number }}
+          name: Friends Voice - build ${{ github.run_number }}
           body: |
-            Friends Voice 1.0 Aurora Studio (theatre mode, chat search, shortcuts, responsive call dock) Windows build from ${{ github.sha }}.
-            Download FriendsVoice-Windows-x64.zip (only one EXE). Radmin VPN required.
-            Every peer must allow inbound UDP 45888 for chat/discovery, UDP 45889 for voice, UDP 45890 for webcam. Webcam requires Windows desktop-app camera permission.
-            Friends Voice 1.0 retains the 0.8 media wire format. Use 0.8 or later for media communication. Camera is still beta; no built-in encryption or screen sharing. Webcam remains experimental; screen sharing is not yet available.
+            Friends Voice Windows build from ${{ github.sha }}.
+            Download FriendsVoice-Windows-x64.zip (one EXE inside). Radmin VPN required.
+            Every peer must allow inbound UDP 45888 (chat/discovery), 45889 (voice) and 45890 (webcam) inside the trusted VPN. Webcam requires the Windows privacy setting that lets desktop apps use the camera.
+            New in this build: redesigned minimal interface, camera selection by name with a private preview, 16:9 camera crop, 640x360 quality. Camera is still beta; no end-to-end encryption or screen sharing.
+            Everyone in a call should use the same build.
           prerelease: true
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip
@@ -73,12 +77,10 @@ jobs:
         with:
           tag_name: v1.0.0
           target_commitish: ${{ github.sha }}
-          name: Friends Voice 1.0 — Aurora Studio
+          name: Friends Voice 1.0
           body: |
-            Friends Voice 1.0 - Aurora Studio visual milestone.
-            Redesigned responsive Windows app with theatre mode, live call dock,
-            chat search, unread messages, keyboard shortcuts and native neon UI.
-            Same P2P media protocol as 0.8, via trusted private Radmin VPN only.
+            Friends Voice 1.0 milestone.
+            P2P voice, chat and webcam over a trusted private Radmin VPN.
 
             Camera is still experimental JPEG/UDP.
             No built-in end-to-end encryption, identity verification,

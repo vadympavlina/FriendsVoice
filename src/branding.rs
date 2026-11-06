@@ -1,73 +1,68 @@
-//! Programmatic Windows taskbar/window icon: Aurora waveform mark.
-//! Rendered into RGBA pixels, no external images, fonts or installers required.
+//! Window / taskbar icon, rendered into RGBA pixels (no external image files).
+//!
+//! The mark is two overlapping circles: two friends in one room. The overlap
+//! is the amber lens that also appears next to the wordmark in the sidebar.
 pub fn icon() -> eframe::egui::IconData {
-    const SIDE: u32 = 96;
+    const SIDE: u32 = 128;
+    let tile = [24.0f32, 25.0, 29.0];
+    let paper = [236.0f32, 235.0, 231.0];
+    let amber = [240.0f32, 177.0, 74.0];
+    let (left, right) = ((46.0f32, 64.0f32), (82.0f32, 64.0f32));
+    let radius = 27.0f32;
+    let ring = 4.5f32;
+
+    // Signed distance helpers return coverage in 0..=1 with ~1px anti-aliasing.
+    let coverage = |d: f32| (0.5 - d).clamp(0.0, 1.0);
     let mut rgba = Vec::with_capacity((SIDE * SIDE * 4) as usize);
-    let bars: [(f32, f32); 5] = [
-        (23.0, 19.0),
-        (35.0, 37.0),
-        (47.5, 49.0),
-        (60.0, 31.0),
-        (72.5, 17.0),
-    ];
     for y in 0..SIDE {
         for x in 0..SIDE {
-            let fx = x as f32 + 0.5;
-            let fy = y as f32 + 0.5;
-            let dx = (fx - 48.0).abs() - 24.0;
-            let dy = (fy - 48.0).abs() - 24.0;
-            let ax = dx.max(0.0);
-            let ay = dy.max(0.0);
-            let edge = (ax * ax + ay * ay).sqrt() + dx.max(dy).min(0.0) - 21.0;
-            let alpha = (0.5 - edge).clamp(0.0, 1.0);
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+
+            // Rounded-square tile.
+            let dx = (fx - 64.0).abs() - (58.0 - 26.0);
+            let dy = (fy - 64.0).abs() - (58.0 - 26.0);
+            let tile_d = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt()
+                + dx.max(dy).min(0.0)
+                - 26.0;
+            let alpha = coverage(tile_d);
             if alpha <= 0.0 {
-                rgba.extend_from_slice(&[0,0,0,0]);
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
                 continue;
             }
-            let t = ((fx + fy) / 192.0).clamp(0.0, 1.0);
-            let mut rgb = [
-                91.0 + 14.0*t,
-                67.0 + 37.0*t,
-                196.0 + 37.0*t,
-            ];
-            let gl = ((fx-66.0).powi(2)+(fy-32.0).powi(2)).sqrt();
-            let glow = (1.0 - gl/74.0).clamp(0.0,1.0) * 0.23;
-            rgb[1] += glow * 81.0;
-            rgb[2] += glow * 12.0;
-            for (index,(bx,height)) in bars.iter().enumerate() {
-                let half = *height * 0.5;
-                let d = (fx-*bx).abs() - 4.0;
-                let vertical = (fy-48.0).abs()-(half-4.0);
-                let distance = (d.max(0.0).powi(2)+vertical.max(0.0).powi(2)).sqrt()
-                    + d.max(vertical).min(0.0)-4.0;
-                let coverage = (0.8 - distance).clamp(0.0, 1.0);
-                let tone = if index == 2 {
-                    [244.0, 253.0, 255.0]
-                } else {
-                    [196.0, 242.0, 255.0]
-                };
-                for channel in 0..3 {
-                    rgb[channel] = rgb[channel] * (1.0-coverage) + tone[channel]*coverage;
+
+            let dist_l = ((fx - left.0).powi(2) + (fy - left.1).powi(2)).sqrt() - radius;
+            let dist_r = ((fx - right.0).powi(2) + (fy - right.1).powi(2)).sqrt() - radius;
+            let mut rgb = tile;
+            let mix = |rgb: &mut [f32; 3], tone: [f32; 3], k: f32| {
+                for c in 0..3 {
+                    rgb[c] = rgb[c] * (1.0 - k) + tone[c] * k;
                 }
-            }
+            };
+            // Lens: inside both circles.
+            mix(&mut rgb, amber, coverage(dist_l.max(dist_r)));
+            // Outlines of both circles.
+            mix(&mut rgb, paper, coverage(dist_l.abs() - ring * 0.5));
+            mix(&mut rgb, paper, coverage(dist_r.abs() - ring * 0.5));
+
             rgba.extend_from_slice(&[
-                rgb[0].clamp(0.0,255.0) as u8,
-                rgb[1].clamp(0.0,255.0) as u8,
-                rgb[2].clamp(0.0,255.0) as u8,
-                (alpha*255.0) as u8,
+                rgb[0].clamp(0.0, 255.0) as u8,
+                rgb[1].clamp(0.0, 255.0) as u8,
+                rgb[2].clamp(0.0, 255.0) as u8,
+                (alpha * 255.0) as u8,
             ]);
         }
     }
     eframe::egui::IconData { rgba, width: SIDE, height: SIDE }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn icon_has_alpha_and_valid_dimensions() {
         let image = icon();
-        assert_eq!(image.rgba.len(), 96 * 96 * 4);
-        assert_eq!(image.rgba[3],0);
-        assert_eq!(image.rgba[((48*96+48)*4+3) as usize],255);
+        assert_eq!(image.rgba.len(), 128 * 128 * 4);
+        assert_eq!(image.rgba[3], 0, "corner must be transparent");
+        assert_eq!(image.rgba[((64 * 128 + 64) * 4 + 3) as usize], 255);
     }
 }

@@ -23,9 +23,9 @@ use std::{
 // Three practical presets: stability first, then smoothness, then detail.
 fn video_preset(mode: u32) -> (u32, u32, u64, u8) {
     match mode {
-        0 => (320, 180, 5, 42),  // Saver
-        2 => (480, 270, 8, 50), // Sharper, limited to 8 fps
-        _ => (320, 180, 9, 54), // Balanced (default)
+        0 => (320, 180, 6, 42),  // Saver
+        2 => (640, 360, 12, 46), // Sharp: more traffic, steps quality down if a frame is too big
+        _ => (480, 270, 10, 50), // Balanced (default)
     }
 }
 const MAX_JPEG_BYTES: usize = 36_000;
@@ -165,14 +165,62 @@ fn parse_fragment(datagram: &[u8]) -> Option<(u64, u64, u32, usize, usize, &[u8]
 fn decode_jpeg(id: u64, data: &[u8]) -> Option<VideoFrame> {
     if data.len() > MAX_JPEG_BYTES || data.is_empty() { return None; }
     let image = image::load_from_memory_with_format(data, ImageFormat::Jpeg).ok()?.to_rgb8();
-    if !matches!((image.width(), image.height()), (320, 180) | (480, 270)) { return None; }
+    if !matches!((image.width(), image.height()), (320, 180) | (480, 270) | (640, 360)) { return None; }
     Some(VideoFrame {
         sender_id: id, width: image.width() as usize, height: image.height() as usize,
         rgb: image.into_raw(),
     })
 }
+/// Names of the cameras Windows reports, as `(index, name)`.
+pub fn list_cameras() -> Vec<(u32, String)> {
+    nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .map(|found| {
+            found.into_iter()
+                .filter_map(|info| Some((info.index().as_index().ok()?, info.human_name())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Cameras differ a lot: many laptop webcams offer MJPEG only at 720p, others only
+/// raw YUY2/NV12. Try the formats we want most first and fall back gracefully
+/// instead of failing with "format not found".
+fn open_camera(index: u32) -> Result<Camera, String> {
+    let attempts = [
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(1280, 720), FrameFormat::MJPEG, 30)),
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(640, 480), FrameFormat::MJPEG, 30)),
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 30)),
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30)),
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(640, 480), FrameFormat::NV12, 30)),
+        RequestedFormatType::AbsoluteHighestFrameRate,
+    ];
+    let mut last_error = String::from("камера не підтримує жодного відомого формату");
+    for attempt in attempts {
+        let requested = RequestedFormat::new::<RgbFormat>(attempt);
+        match Camera::new(CameraIndex::Index(index), requested) {
+            Ok(mut camera) => match camera.open_stream() {
+                Ok(()) => return Ok(camera),
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    Err(last_error)
+}
+
+/// Cut the largest centred 16:9 region out of a frame. Webcams commonly deliver
+/// 4:3; squeezing that into 16:9 makes everybody look flattened.
+fn crop_to_16x9(image: &RgbImage) -> RgbImage {
+    let (w, h) = (image.width(), image.height());
+    if w == 0 || h == 0 { return image.clone(); }
+    let (crop_w, crop_h) = if w * 9 > h * 16 { (h * 16 / 9, h) } else { (w, w * 9 / 16) };
+    if (crop_w, crop_h) == (w, h) { return image.clone(); }
+    image::imageops::crop_imm(image, (w - crop_w) / 2, (h - crop_h) / 2, crop_w, crop_h).to_image()
+}
+
 fn webcam_loop(
     active: Arc<AtomicBool>,
+    live: Arc<AtomicBool>,
     id: u64,
     targets: Arc<Mutex<Vec<Ipv4Addr>>>,
     events: SyncSender<VideoEvent>,
@@ -180,24 +228,22 @@ fn webcam_loop(
     camera_index: u32,
     quality: Arc<AtomicU32>,
 ) {
-    let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
-        CameraFormat::new(Resolution::new(640, 480), FrameFormat::MJPEG, 15)
-    ));
-    let mut camera = match Camera::new(CameraIndex::Index(camera_index), requested) {
+    if !active.load(Ordering::Relaxed) { return; }
+    let mut camera = match open_camera(camera_index) {
         Ok(camera) => camera,
         Err(error) => {
-            let _ = events.try_send(VideoEvent::Error(format!("Камера недоступна: {error}")));
+            let _ = events.try_send(VideoEvent::Error(format!(
+                "Камера не запустилася: {error}. Перевір, що в Параметрах Windows (Конфіденційність → Камера) \
+                 дозволено доступ для класичних програм і що камеру не займає інша програма."
+            )));
             return;
         }
     };
-    if let Err(error) = camera.open_stream() {
-        let _ = events.try_send(VideoEvent::Error(format!("Не вдається увімкнути камеру: {error}")));
-        return;
-    }
     let socket = match UdpSocket::bind(("0.0.0.0", 0)) {
         Ok(socket) => socket,
         Err(error) => {
             let _ = events.try_send(VideoEvent::Error(format!("Порт передачі камери: {error}")));
+            let _ = camera.stop_stream();
             return;
         }
     };
@@ -205,27 +251,35 @@ fn webcam_loop(
     let video_session_id = rand::random::<u64>().max(1);
     let mut last_sent: Option<Vec<u8>> = None;
     let mut last_send_time = Instant::now() - Duration::from_secs(2);
+    let mut last_processed = Instant::now() - Duration::from_secs(1);
+    let mut failures = 0u32;
     while active.load(Ordering::Relaxed) {
-        let start = Instant::now();
-        let (width, height, fps, jpeg_quality) =
-            video_preset(quality.load(Ordering::Relaxed));
+        let (width, height, fps, jpeg_quality) = video_preset(quality.load(Ordering::Relaxed));
+        // Always pull frames at the camera's own pace so the driver queue never
+        // fills up (that would add seconds of delay); only *process* at `fps`.
         let frame = match camera.frame() {
-            Ok(frame) => frame,
+            Ok(frame) => { failures = 0; frame }
             Err(error) => {
-                let _ = events.try_send(VideoEvent::Error(format!("Помилка кадру з камери: {error}")));
-                break;
-            }
-        };
-        if !active.load(Ordering::Relaxed) { break; }
-        let decoded = match frame.decode_image::<RgbFormat>() {
-            Ok(image) => image,
-            Err(error) => {
-                let _ = events.try_send(VideoEvent::Error(format!("Декодування камери: {error}")));
+                failures += 1;
+                if failures >= 8 {
+                    let _ = events.try_send(VideoEvent::Error(format!("Камера перестала відповідати: {error}")));
+                    break;
+                }
+                thread::sleep(Duration::from_millis(40));
                 continue;
             }
         };
-        // Resize *before* encoding, avoiding expensive full-resolution video transmission.
-        let small: RgbImage = image::imageops::resize(&decoded, width, height, FilterType::Triangle);
+        if !active.load(Ordering::Relaxed) { break; }
+        if last_processed.elapsed() < Duration::from_millis(1000 / fps) { continue; }
+        last_processed = Instant::now();
+        let decoded = match frame.decode_image::<RgbFormat>() {
+            Ok(image) => image,
+            Err(_) => continue, // a single corrupt frame is not worth a notification
+        };
+        // Crop to 16:9 first, then shrink *before* encoding.
+        let cropped = crop_to_16x9(&decoded);
+        let small: RgbImage = image::imageops::resize(&cropped, width, height, FilterType::CatmullRom);
+        live.store(true, Ordering::Relaxed);
         // Keep the preview responsive, but reduce traffic when almost nothing moves.
         let _ = events.try_send(VideoEvent::Frame(VideoFrame {
             sender_id: id, width: width as usize, height: height as usize,
@@ -243,10 +297,10 @@ fn webcam_loop(
             delta > count.saturating_mul(4)
         });
         let should_send = has_motion || last_send_time.elapsed() >= Duration::from_millis(950);
-        let ips = targets.lock().map(|t|t.clone()).unwrap_or_default();
+        let ips = targets.lock().map(|t| t.clone()).unwrap_or_default();
         if !ips.is_empty() && should_send {
-            // A higher-quality frame may exceed the VPN-safe bound. Retry at lower quality.
-            for jpeg_quality in [jpeg_quality, 40, 30] {
+            // A detailed frame may exceed the VPN-safe bound. Retry at lower quality.
+            for jpeg_quality in [jpeg_quality, 40, 32, 26] {
                 let mut compressed = Vec::new();
                 let encoded = JpegEncoder::new_with_quality(&mut compressed, jpeg_quality)
                     .encode(small.as_raw(), width, height, ExtendedColorType::Rgb8);
@@ -266,15 +320,14 @@ fn webcam_loop(
                 }
             }
         }
-        let interval = Duration::from_millis(1000 / fps);
-        if let Some(rest) = interval.checked_sub(start.elapsed()) {
-            thread::sleep(rest);
-        }
     }
+    live.store(false, Ordering::Relaxed);
     let _ = camera.stop_stream();
 }
 pub struct VideoSession {
     active: Arc<AtomicBool>,
+    /// True once the camera has produced its first frame.
+    live: Arc<AtomicBool>,
     recv_stop: Arc<AtomicBool>,
     webcam_worker: Option<JoinHandle<()>>,
     recv_worker: Option<JoinHandle<()>>,
@@ -374,6 +427,7 @@ impl VideoSession {
         });
         Ok(Self {
             active: Arc::new(AtomicBool::new(false)),
+            live: Arc::new(AtomicBool::new(false)),
             recv_stop,
             webcam_worker: None,
             recv_worker: Some(worker),
@@ -386,25 +440,34 @@ impl VideoSession {
         })
     }
     pub fn enabled(&self) -> bool { self.active.load(Ordering::Relaxed) }
+    /// Camera was switched on but has not delivered a frame yet.
+    pub fn starting(&self) -> bool { self.enabled() && !self.live.load(Ordering::Relaxed) }
     pub fn enable(&mut self) {
         if self.enabled() { return; }
-        self.disable();
         self.active = Arc::new(AtomicBool::new(true));
+        self.live = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&self.active);
+        let live = Arc::clone(&self.live);
         let tx = self.events_tx.clone();
         let id = self.local_id;
         let peers = Arc::clone(&self.targets);
         let count = Arc::clone(&self.frames_sent);
         let camera_index = self.camera_index.load(Ordering::Relaxed);
         let quality = Arc::clone(&self.quality);
+        // Opening a camera can take seconds. A previous worker may still be
+        // releasing the device, so the new one waits for it on its own thread
+        // instead of blocking the UI.
+        let previous = self.webcam_worker.take();
         self.webcam_worker = Some(thread::spawn(move || {
-            webcam_loop(Arc::clone(&stop), id, peers, tx, count, camera_index, quality);
+            if let Some(previous) = previous { let _ = previous.join(); }
+            webcam_loop(Arc::clone(&stop), live, id, peers, tx, count, camera_index, quality);
             stop.store(false, Ordering::Relaxed);
         }));
     }
+    /// Asks the camera worker to stop; never blocks the caller.
     pub fn disable(&mut self) {
         self.active.store(false, Ordering::Relaxed);
-        if let Some(worker) = self.webcam_worker.take() { let _ = worker.join(); }
+        self.live.store(false, Ordering::Relaxed);
     }
     pub fn poll_events(&mut self) -> Vec<VideoEvent> {
         let mut found = Vec::new();
@@ -418,6 +481,7 @@ impl VideoSession {
 impl Drop for VideoSession {
     fn drop(&mut self) {
         self.disable();
+        if let Some(worker) = self.webcam_worker.take() { let _ = worker.join(); }
         self.recv_stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.recv_worker.take() { let _ = worker.join(); }
         if let Some(worker) = self.decode_worker.take() { let _ = worker.join(); }
@@ -432,9 +496,41 @@ mod tests {
         assert!(seq_newer(0, u32::MAX));
         assert!(!seq_newer(5, 10));
         assert!(!seq_newer(20, 20));
-        assert_eq!(video_preset(0), (320, 180, 5, 42));
-        assert_eq!(video_preset(2), (480, 270, 8, 50));
-        assert_eq!(video_preset(99), (320, 180, 9, 54));
+        assert_eq!(video_preset(0), (320, 180, 6, 42));
+        assert_eq!(video_preset(2), (640, 360, 12, 46));
+        assert_eq!(video_preset(99), (480, 270, 10, 50));
+    }
+    #[test]
+    fn every_preset_resolution_is_accepted_by_the_receiver() {
+        for mode in 0..3 {
+            let (w, h, _, q) = video_preset(mode);
+            let image = RgbImage::from_fn(w, h, |x, y| image::Rgb([x as u8, y as u8, 90]));
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, q)
+                .encode(image.as_raw(), w, h, ExtendedColorType::Rgb8).unwrap();
+            let frame = decode_jpeg(1, &jpeg).unwrap_or_else(|| panic!("preset {mode} rejected"));
+            assert_eq!((frame.width as u32, frame.height as u32), (w, h));
+        }
+    }
+    #[test]
+    fn crop_keeps_aspect_instead_of_squeezing() {
+        let four_three = RgbImage::new(640, 480);
+        let cropped = crop_to_16x9(&four_three);
+        assert_eq!((cropped.width(), cropped.height()), (640, 360));
+        let ultrawide = RgbImage::new(1000, 300);
+        let cropped = crop_to_16x9(&ultrawide);
+        assert_eq!((cropped.width(), cropped.height()), (533, 300));
+        let already = RgbImage::new(1280, 720);
+        assert_eq!(crop_to_16x9(&already).dimensions(), (1280, 720));
+    }
+    #[test]
+    fn crop_takes_the_centre_of_the_frame() {
+        let mut image = RgbImage::new(160, 120);
+        for y in 0..120 { for x in 0..160 {
+            image.put_pixel(x, y, image::Rgb([0, y as u8, 0]));
+        }}
+        let cropped = crop_to_16x9(&image); // 160x90 starting at y = 15
+        assert_eq!(cropped.get_pixel(0, 0)[1], 15);
     }
     #[test]
     fn fragments_roundtrip_and_out_of_order() {
