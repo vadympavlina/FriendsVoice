@@ -29,6 +29,44 @@ fn key_is_down(vkey: i32) -> bool {
     #[cfg(not(target_os = "windows"))]
     { let _ = vkey; false }
 }
+/// Every key or mouse button currently held, as Windows virtual-key codes.
+/// Left and right mouse buttons are skipped so clicking the UI never binds them,
+/// and the generic Shift/Ctrl/Alt codes are skipped in favour of the left/right ones.
+pub fn pressed_keys() -> Vec<i32> {
+    (0x03..=0xFE)
+        .filter(|vk| !matches!(vk, 0x10 | 0x11 | 0x12))
+        .filter(|vk| key_is_down(*vk))
+        .collect()
+}
+
+/// Human-readable name of a virtual-key code for the settings screen.
+pub fn vk_name(vk: i32) -> String {
+    match vk {
+        0x03 => "Cancel".into(), 0x04 => "Середня кнопка миші".into(),
+        0x05 => "Mouse4 (бічна)".into(), 0x06 => "Mouse5 (бічна)".into(),
+        0x08 => "Backspace".into(), 0x09 => "Tab".into(), 0x0D => "Enter".into(),
+        0x13 => "Pause".into(), 0x14 => "Caps Lock".into(), 0x1B => "Esc".into(),
+        0x20 => "Пробіл".into(), 0x21 => "Page Up".into(), 0x22 => "Page Down".into(),
+        0x23 => "End".into(), 0x24 => "Home".into(), 0x25 => "←".into(),
+        0x26 => "↑".into(), 0x27 => "→".into(), 0x28 => "↓".into(),
+        0x2C => "Print Screen".into(), 0x2D => "Insert".into(), 0x2E => "Delete".into(),
+        0x30..=0x39 => ((vk as u8) as char).to_string(),
+        0x41..=0x5A => ((vk as u8) as char).to_string(),
+        0x5B => "Left Win".into(), 0x5C => "Right Win".into(), 0x5D => "Menu".into(),
+        0x60..=0x69 => format!("Num {}", vk - 0x60),
+        0x6A => "Num *".into(), 0x6B => "Num +".into(), 0x6D => "Num −".into(),
+        0x6E => "Num .".into(), 0x6F => "Num /".into(),
+        0x70..=0x87 => format!("F{}", vk - 0x6F),
+        0x90 => "Num Lock".into(), 0x91 => "Scroll Lock".into(),
+        0xA0 => "Left Shift".into(), 0xA1 => "Right Shift".into(),
+        0xA2 => "Left Ctrl".into(), 0xA3 => "Right Ctrl".into(),
+        0xA4 => "Left Alt".into(), 0xA5 => "Right Alt".into(),
+        0xBA => ";".into(), 0xBB => "=".into(), 0xBC => ",".into(), 0xBD => "-".into(),
+        0xBE => ".".into(), 0xBF => "/".into(), 0xC0 => "`".into(), 0xDB => "[".into(),
+        0xDC => "\\".into(), 0xDD => "]".into(), 0xDE => "'".into(),
+        other => format!("Клавіша 0x{other:02X}"),
+    }
+}
 pub const PTT_VK: i32 = 0x77; // F8 default, user-selectable
 pub const MUTE_VK: i32 = 0x78; // F9
 fn allowed_to_transmit(master_on: bool, push_to_talk: bool, key_down: bool) -> bool {
@@ -634,6 +672,23 @@ mod tests {
         assert!(gate.allow(&voice, 0.02));
         for _ in 0..12 { assert!(gate.allow(&silent, 0.02)); }
         assert!(!gate.allow(&silent, 0.02));
+    }
+
+    #[test]
+    fn key_names_are_readable() {
+        assert_eq!(vk_name(0x77), "F8");
+        assert_eq!(vk_name(0x41), "A");
+        assert_eq!(vk_name(0x35), "5");
+        assert_eq!(vk_name(0x05), "Mouse4 (бічна)");
+        assert_eq!(vk_name(0x62), "Num 2");
+        assert_eq!(vk_name(0xA2), "Left Ctrl");
+        assert_eq!(vk_name(0x87), "F24");
+        assert!(vk_name(0xE9).starts_with("Клавіша"));
+    }
+    #[test]
+    fn pressed_keys_never_reports_clicks_or_generic_modifiers() {
+        // Nothing is held on a CI machine; the list must simply be valid.
+        assert!(pressed_keys().iter().all(|vk| !matches!(vk, 0x01 | 0x02 | 0x10 | 0x11 | 0x12)));
     }
 
     #[test]

@@ -29,6 +29,16 @@ WEBCAM CHECKLIST (please test on a real PC)
  6. Test a camera that is used by another app: you should get a clear
     message with the Windows privacy hint, not a silent failure.
  7. Test a laptop camera and, if possible, an external USB camera.
+ 8. Settings > Video shows "Camera mode: MJPEG 1280x720..." and the frame
+    counter must keep growing while the camera is on; "not decoded" must
+    stay at 0 (or very low). If it grows, tell us the camera name and mode.
+ 9. Try the HD quality with a friend and watch smoothness.
+
+PUSH-TO-TALK
+ 1. Settings > Sound > Change key: press a letter, an F-key, a numpad key
+    or a side mouse button. The new key is shown and saved.
+ 2. Enable Push-to-Talk, join a call, hold the key: the top bar shows who
+    is talking. F9 cannot be assigned (reserved for the mic toggle).
 
 GENERAL CHECKLIST
  1. Start at 960x620, 1366x768 and 1920x1080; try 125% and 150% scaling.

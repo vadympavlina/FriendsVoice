@@ -358,7 +358,7 @@ fn best_grid(count: usize, w: f32, h: f32, gap: f32) -> (usize, f32, f32) {
 
 fn paint_tile(
     ui: &mut Ui, rect: Rect, name: &str, note: Option<&str>,
-    speaking: bool, video: Option<&egui::TextureHandle>,
+    speaking: bool, video: Option<&egui::TextureHandle>, badge: Option<&str>,
 ) {
     let p = ui.painter_at(rect);
     let rounding = Rounding::same(12.0);
@@ -394,6 +394,11 @@ fn paint_tile(
     p.rect_filled(pill, Rounding::same(6.0), Color32::from_black_alpha(165));
     p.galley(pill.min + Vec2::new(8.0, 4.0), galley, TEXT);
 
+    if let Some(glyph) = badge {
+        let center = Pos2::new(rect.right() - 22.0, rect.top() + 22.0);
+        p.circle_filled(center, 14.0, RED);
+        p.text(center, Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), Color32::WHITE);
+    }
     let glow = ui.ctx().animate_bool_with_time(
         egui::Id::new(("tile-ring", name)), speaking, 0.12);
     if glow > 0.01 {
@@ -688,6 +693,14 @@ impl FriendsApp {
                         ui.add_space(6.0);
                         ui.label(mono(clock(start.elapsed().as_secs()), 13.0, GREEN));
                     }
+                    if self.voice.is_some() && self.push_to_talk.load(Ordering::Relaxed) {
+                        let talking = self.voice.as_ref()
+                            .is_some_and(|v| v.transmitting.load(Ordering::Relaxed));
+                        ui.add_space(6.0);
+                        ui.label(text(format!("Тримай {}, щоб говорити",
+                            voice::vk_name(self.ptt_key.load(Ordering::Relaxed))),
+                            12.5, if talking { GREEN } else { TEXT3 }));
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         if icon_button(ui, ph::GEAR, "Налаштування", false, 34.0) {
@@ -730,12 +743,16 @@ impl FriendsApp {
 
         // Everyone in the room is on stage; friends who have not joined voice
         // are shown only in the sidebar.
-        struct Entry { name: String, note: Option<&'static str>, speaking: bool, id: Option<u64> }
+        struct Entry { name: String, note: Option<&'static str>, speaking: bool, id: Option<u64>, badge: Option<&'static str> }
         let mut entries = vec![Entry {
             name: self.settings.nickname.clone(),
             note: Some("ти"),
             speaking: self.voice.as_ref().is_some_and(|v| v.transmitting.load(Ordering::Relaxed)),
             id: self.mesh.as_ref().map(|m| m.id),
+            badge: if !in_voice { None }
+                else if self.deafened.load(Ordering::Relaxed) { Some(ph::SPEAKER_SLASH) }
+                else if !self.mic_enabled.load(Ordering::Relaxed) { Some(ph::MICROPHONE_SLASH) }
+                else { None },
         }];
         for peer in self.peers.iter().filter(|p| p.voice || !in_voice) {
             entries.push(Entry {
@@ -743,6 +760,7 @@ impl FriendsApp {
                 note: (peer.protocol != PROTOCOL_VERSION).then_some("потрібне оновлення"),
                 speaking: self.voice.as_ref().is_some_and(|v| v.is_speaking(peer.id)),
                 id: Some(peer.id),
+                badge: None,
             });
         }
         let gap = 12.0;
@@ -759,7 +777,7 @@ impl FriendsApp {
                 Pos2::new(left + column as f32 * (tile_w + gap), top + row as f32 * (tile_h + gap)),
                 Vec2::new(tile_w, tile_h));
             let texture = entry.id.and_then(|id| self.video_textures.get(&id));
-            paint_tile(ui, rect, &entry.name, entry.note, entry.speaking, texture);
+            paint_tile(ui, rect, &entry.name, entry.note, entry.speaking, texture, entry.badge);
         }
         if alone {
             let center = Pos2::new(area.center().x, top + total_h + 26.0);
@@ -941,6 +959,7 @@ impl FriendsApp {
                                         ui.horizontal(|ui| {
                                             ui.label(strong(&message.name, 14.0, name_color(&message.name)));
                                             if mine { ui.label(text("ти", 11.5, TEXT3)); }
+                                            ui.label(text(&message.time, 11.5, TEXT3));
                                         });
                                     }
                                     ui.add(egui::Label::new(text(&message.text, 14.0, TEXT)).wrap());
@@ -1019,6 +1038,7 @@ impl FriendsApp {
     }
 
     fn settings_audio(&mut self, ui: &mut Ui) {
+        let devices_before = (self.settings.input_device.clone(), self.settings.output_device.clone());
         Self::group(ui, "Пристрої");
         Self::field(ui, "Мікрофон");
         egui::ComboBox::from_id_salt("fv_input_device")
@@ -1041,25 +1061,27 @@ impl FriendsApp {
                 }
             });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if quiet_button(ui, "Оновити список") {
-                self.input_devices = voice::list_input_devices();
-                self.output_devices = voice::list_output_devices();
-            }
-            if primary_button(ui, "Зберегти", true) {
-                self.settings.volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
-                save_settings(&self.settings);
-                self.notice("Налаштування звуку збережено.");
-            }
-        });
-        Self::hint(ui, "Після зміни пристрою вийди з голосового каналу й зайди знову.");
+        if quiet_button(ui, "Оновити список") {
+            self.input_devices = voice::list_input_devices();
+            self.output_devices = voice::list_output_devices();
+        }
+        if devices_before != (self.settings.input_device.clone(), self.settings.output_device.clone()) {
+            save_settings(&self.settings);
+            if self.voice.is_some() { self.notice("Пристрій збережено. Перезайди у голосовий канал, щоб він почав працювати."); }
+        }
+        Self::hint(ui, "Вибір зберігається одразу. Після зміни пристрою вийди з голосового каналу й зайди знову.");
 
         Self::group(ui, "Гучність і мікрофон");
         Self::field(ui, "Гучність відтворення");
         let mut volume = f32::from_bits(self.volume.load(Ordering::Relaxed)).clamp(0.0, 2.0);
-        if ui.add(egui::Slider::new(&mut volume, 0.0..=2.0)
-            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).changed() {
+        let slider = ui.add(egui::Slider::new(&mut volume, 0.0..=2.0)
+            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+        if slider.changed() {
             self.volume.store(volume.to_bits(), Ordering::Relaxed);
+        }
+        if slider.drag_stopped() {
+            self.settings.volume = volume;
+            save_settings(&self.settings);
         }
         Self::field(ui, "Рівень мікрофона");
         let level = self.voice.as_ref()
@@ -1072,29 +1094,32 @@ impl FriendsApp {
 
         Self::group(ui, "Коли передавати голос");
         let mut ptt = self.push_to_talk.load(Ordering::Relaxed);
-        let hotkey_label = match self.ptt_key.load(Ordering::Relaxed) {
-            0x05 => "Mouse4", 0x06 => "Mouse5", 0x75 => "F6", 0x76 => "F7",
-            0x77 => "F8", 0x79 => "F10", 0x7A => "F11", 0x7B => "F12", _ => "F8",
-        };
         if ui.checkbox(&mut ptt, "Говорити лише при натиснутій клавіші (Push-to-Talk)").changed() {
             self.push_to_talk.store(ptt, Ordering::Relaxed);
             self.settings.push_to_talk = ptt;
             save_settings(&self.settings);
         }
         Self::field(ui, "Клавіша");
-        let mut key = self.ptt_key.load(Ordering::Relaxed);
-        egui::ComboBox::from_id_salt("fv_ptt_key").selected_text(hotkey_label).show_ui(ui, |ui| {
-            for (label, vk) in [("F6", 0x75), ("F7", 0x76), ("F8", 0x77), ("F10", 0x79),
-                ("F11", 0x7A), ("F12", 0x7B), ("Mouse4 (бічна)", 0x05), ("Mouse5 (бічна)", 0x06)] {
-                ui.selectable_value(&mut key, vk, label);
+        let key = self.ptt_key.load(Ordering::Relaxed);
+        ui.horizontal(|ui| {
+            if self.ptt_capture.is_some() {
+                egui::Frame::none().fill(RAISED).stroke(Stroke::new(1.5_f32, AMBER))
+                    .rounding(Rounding::same(8.0)).inner_margin(Margin::symmetric(12.0, 7.0))
+                    .show(ui, |ui| ui.label(text("Натисни клавішу або кнопку миші…", 14.0, AMBER)));
+                if quiet_button(ui, "Скасувати") { self.ptt_capture = None; }
+            } else {
+                egui::Frame::none().fill(RAISED).rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(12.0, 7.0))
+                    .show(ui, |ui| ui.label(mono(voice::vk_name(key), 14.0, TEXT)));
+                if primary_button(ui, "Змінити клавішу", true) { self.start_ptt_capture(); }
+                if key != voice::PTT_VK && quiet_button(ui, "Повернути F8") {
+                    self.ptt_key.store(voice::PTT_VK, Ordering::Relaxed);
+                    self.settings.ptt_key = voice::PTT_VK;
+                    save_settings(&self.settings);
+                }
             }
         });
-        if key != self.ptt_key.load(Ordering::Relaxed) {
-            self.ptt_key.store(key, Ordering::Relaxed);
-            self.settings.ptt_key = key;
-            save_settings(&self.settings);
-        }
-        Self::hint(ui, "F9 вмикає й вимикає мікрофон навіть під час гри. Ctrl+M робить те саме всередині програми.");
+        Self::hint(ui, "Підходить будь-яка клавіша чи кнопка миші, зокрема бічні. Esc скасовує вибір. Клавіша F9 завжди вмикає й вимикає мікрофон, навіть у грі (в програмі те саме робить Ctrl+M).");
         if let Some(voice) = &self.voice {
             let talking = voice.transmitting.load(Ordering::Relaxed);
             ui.add_space(4.0);
@@ -1175,7 +1200,7 @@ impl FriendsApp {
         let local_id = self.mesh.as_ref().map(|m| m.id);
         let texture = local_id.and_then(|id| self.video_textures.get(&id));
         let note = if starting { Some("запуск камери") } else if !on { Some("камеру вимкнено") } else { None };
-        paint_tile(ui, rect, &self.settings.nickname.clone(), note, false, texture);
+        paint_tile(ui, rect, &self.settings.nickname.clone(), note, false, texture, None);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if on {
@@ -1228,16 +1253,33 @@ impl FriendsApp {
         let label = |q: u32| match q {
             0 => "Економія · 320×180, 6 к/с",
             2 => "Висока · 640×360, 12 к/с",
+            3 => "HD · 960×540, 15 к/с",
             _ => "Баланс · 480×270, 10 к/с",
+        };
+        let traffic = |q: u32| match q {
+            0 => "≈0,3 Мбіт/с", 2 => "≈3 Мбіт/с", 3 => "≈6 Мбіт/с", _ => "≈1,2 Мбіт/с",
         };
         egui::ComboBox::from_id_salt("fv_video_quality").width(260.0).selected_text(label(original))
             .show_ui(ui, |ui| {
-                for q in 0..3u32 { ui.selectable_value(&mut selected, q, label(q)); }
+                for q in 0..4u32 { ui.selectable_value(&mut selected, q, label(q)); }
             });
         if selected != original { self.update_video_quality(selected); }
-        Self::hint(ui, "Висока якість надсилає втричі більше даних кожному другу. Якщо відео смикається, обери «Економію». Камера підганяється під формат 16:9.");
+        Self::hint(ui, format!(
+            "Трафік у дзвінку на кожного друга: {}. Чим вища якість, тим більше потрібно швидкості відправки. Якщо відео смикається, обери нижчу. Камера підганяється під формат 16:9.",
+            traffic(original)));
         if let Some(video) = &self.video {
             ui.add_space(6.0);
+            let info = video.diagnostics.format.lock().map(|f| f.clone()).unwrap_or_default();
+            let captured = video.diagnostics.captured.load(Ordering::Relaxed);
+            let failed = video.diagnostics.decode_errors.load(Ordering::Relaxed);
+            if !info.is_empty() {
+                Self::hint(ui, format!("Режим камери: {info}. Кадрів з камери: {captured}, не розпаковано: {failed}."));
+            }
+            if video.stalled() {
+                ui.label(text("Камера не віддає кадри. Вибери іншу камеру, закрий програми, що її займають, і перевір дозвіл у Параметрах Windows.", 12.5, RED));
+            } else if failed > 0 && failed >= captured {
+                ui.label(text("Кадри з камери не вдається розпакувати. Спробуй іншу камеру.", 12.5, RED));
+            }
             Self::hint(ui, format!("Кадрів: надіслано {}, отримано {}, відновлено після втрат {}",
                 video.frames_sent.load(Ordering::Relaxed),
                 video.frames_received.load(Ordering::Relaxed),

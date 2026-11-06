@@ -11,7 +11,7 @@ use mesh::{Mesh, MeshEvent, PeerView};
 use protocol::{CONTROL_PORT, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
@@ -123,7 +123,33 @@ fn parse_known_ip(text: &str) -> Option<SocketAddr> {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct WinSystemTime { year: u16, month: u16, weekday: u16, day: u16, hour: u16, minute: u16, second: u16, millis: u16 }
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetLocalTime(time: *mut WinSystemTime);
+}
+/// Wall-clock time as `HH:MM` in the user's own time zone.
+fn clock_now() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let mut time = WinSystemTime { year: 0, month: 0, weekday: 0, day: 0, hour: 0, minute: 0, second: 0, millis: 0 };
+        unsafe { GetLocalTime(&mut time) };
+        format!("{:02}:{:02}", time.hour, time.minute)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs()).unwrap_or(0);
+        format!("{:02}:{:02}", seconds / 3600 % 24, seconds / 60 % 60)
+    }
+}
+
 struct ChatEntry {
+    /// `HH:MM` when the message arrived.
+    time: String,
     name: String,
     text: String,
     system: bool,
@@ -165,6 +191,9 @@ pub struct FriendsApp {
     voice_started_at: Option<Instant>,
     last_notice: Option<(String, Instant)>,
     add_friend_open: bool,
+    /// While `Some`, the next key press becomes the Push-to-Talk key. Holds keys that were already down.
+    ptt_capture: Option<HashSet<i32>>,
+    camera_stall_reported: bool,
     ip_copied_at: Option<Instant>,
     /// Cameras reported by Windows as `(index, name)`; filled by a background thread.
     cameras: Arc<Mutex<Vec<(u32, String)>>>,
@@ -177,7 +206,7 @@ impl Default for FriendsApp {
         let saved_ptt = settings.push_to_talk;
         let saved_ptt_key = settings.ptt_key;
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
-        let saved_video_quality = settings.video_quality.min(2);
+        let saved_video_quality = settings.video_quality.min(3);
         let saved_noise_gate = settings.noise_gate;
         let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
@@ -194,6 +223,7 @@ impl Default for FriendsApp {
             friend_ip: String::new(),
             draft: String::new(),
             messages: vec![ChatEntry {
+                time: clock_now(),
                 name: String::new(),
                 text: "Friends Voice працює без сервера! Друзі з однієї мережі Radmin VPN можуть знайти одне одного автоматично. Якщо ні — додай IP друга один раз.".into(),
                 system: true,
@@ -224,6 +254,8 @@ impl Default for FriendsApp {
             voice_started_at: None,
             last_notice: None,
             add_friend_open: false,
+            ptt_capture: None,
+            camera_stall_reported: false,
             ip_copied_at: None,
             cameras: Arc::new(Mutex::new(Vec::new())),
             cameras_loading: Arc::new(AtomicBool::new(false)),
@@ -244,7 +276,7 @@ impl FriendsApp {
                 return;
             }
         }
-        self.messages.push(ChatEntry { name: String::new(), text, system: true, repeat: 1 });
+        self.messages.push(ChatEntry { time: clock_now(), name: String::new(), text, system: true, repeat: 1 });
         if self.messages.len() > 600 { self.messages.remove(0); }
     }
 
@@ -269,7 +301,7 @@ impl FriendsApp {
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
                     if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
-                    self.messages.push(ChatEntry { name, text, system: false, repeat: 1 });
+                    self.messages.push(ChatEntry { time: clock_now(), name, text, system: false, repeat: 1 });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
                 MeshEvent::LearnedAddress(address) => self.remember_ip(address),
@@ -409,6 +441,39 @@ impl FriendsApp {
         }
     }
 
+    fn start_ptt_capture(&mut self) {
+        self.ptt_capture = Some(voice::pressed_keys().into_iter().collect());
+    }
+
+    /// Waits for a new key or mouse button and stores it as the Push-to-Talk key.
+    fn poll_ptt_capture(&mut self) {
+        let Some(held) = self.ptt_capture.as_mut() else { return; };
+        let down: HashSet<i32> = voice::pressed_keys().into_iter().collect();
+        // Keys held when capture started only count again after being released.
+        held.retain(|vk| down.contains(vk));
+        let Some(vk) = down.iter().copied().find(|vk| !held.contains(vk)) else { return; };
+        self.ptt_capture = None;
+        if vk == 0x1B { return; } // Esc cancels
+        if vk == voice::MUTE_VK {
+            self.notice("F9 уже вимикає мікрофон. Обери іншу клавішу.");
+            return;
+        }
+        self.ptt_key.store(vk, Ordering::Relaxed);
+        self.settings.ptt_key = vk;
+        save_settings(&self.settings);
+        self.notice(format!("Клавіша Push-to-Talk: {}.", voice::vk_name(vk)));
+    }
+
+    fn warn_if_camera_stalled(&mut self) {
+        let stalled = self.video.as_ref().is_some_and(|v| v.stalled());
+        if stalled && !self.camera_stall_reported {
+            self.camera_stall_reported = true;
+            self.notice("Камера увімкнена, але кадрів немає. Спробуй іншу камеру або перевір дозвіл у Параметрах Windows.");
+        } else if !stalled && self.video.as_ref().is_none_or(|v| !v.starting()) {
+            self.camera_stall_reported = false;
+        }
+    }
+
     fn refresh_cameras(&self) {
         if self.cameras_loading.swap(true, Ordering::AcqRel) { return; }
         let cameras = Arc::clone(&self.cameras);
@@ -445,7 +510,7 @@ impl FriendsApp {
         }
     }
     fn update_video_quality(&mut self, quality: u32) {
-        let quality = quality.min(2);
+        let quality = quality.min(3);
         self.video_quality.store(quality, Ordering::Relaxed);
         self.settings.video_quality = quality;
         save_settings(&self.settings);
@@ -499,6 +564,8 @@ impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_events();
         self.stop_orphan_preview();
+        self.poll_ptt_capture();
+        self.warn_if_camera_stalled();
         self.poll_video(ctx);
         let shortcuts = ctx.input(|i| {
             let ctrl = i.modifiers.ctrl && !i.modifiers.alt;
@@ -525,7 +592,7 @@ impl eframe::App for FriendsApp {
             self.focus_mode = false;
             self.chat_unread = 0;
         }
-        if shortcuts.4 {
+        if shortcuts.4 && self.ptt_capture.is_none() {
             if self.chat_search_open {
                 self.chat_search_open = false;
                 self.chat_search_focus = false;
@@ -539,7 +606,9 @@ impl eframe::App for FriendsApp {
         }
         // Lower idle CPU/GPU load, but repaint quickly while in a live call.
         // No network worker depends on the UI frame rate.
-        let repaint_ms = if self.video.as_ref().is_some_and(|v| v.enabled()) {
+        let repaint_ms = if self.ptt_capture.is_some() {
+            25
+        } else if self.video.as_ref().is_some_and(|v| v.enabled()) {
             60
         } else if self.voice.is_some() {
             70
