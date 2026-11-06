@@ -247,7 +247,11 @@ fn meter(ui: &mut Ui, level: f32, bars: usize, width: f32) {
         let x = rect.left() + step*i as f32 + 1.0;
         let y = rect.center().y;
         let bar_rect=Rect::from_center_size(Pos2::new(x+step*0.32,y),Vec2::new(step*0.6,bar_height));
-        ui.painter().rect_filled(bar_rect,Rounding::same(2.0),if i<active {GREEN} else {BORDER});
+        let tint=if i < bars/3 {GREEN}
+            else if i < bars*2/3 {BLUE}
+            else {PURPLE};
+        ui.painter().rect_filled(bar_rect,Rounding::same(2.0),
+            if i<active {tint}else{BORDER.linear_multiply(0.65)});
     }
 }
 fn peer_color(idx: usize) -> Color32 {
@@ -1121,6 +1125,21 @@ impl FriendsApp {
     }
 
     pub(super) fn neon_main(&mut self, ui: &mut Ui) {
+        // Native, low-overhead Aurora light fields. Painted behind every real UI
+        // panel; there are no web views, background images or network assets.
+        let canvas=ui.max_rect();
+        let painter=ui.painter_at(canvas);
+        for index in (1..=6).rev() {
+            let radius=index as f32*43.0;
+            painter.circle_filled(
+                Pos2::new(canvas.right()-100.0,canvas.top()+30.0),
+                radius,Color32::from_rgba_unmultiplied(132,91,229,5)
+            );
+            painter.circle_filled(
+                Pos2::new(canvas.left()+70.0,canvas.bottom()-15.0),
+                radius*0.9,Color32::from_rgba_unmultiplied(51,165,224,4)
+            );
+        }
         ui.vertical(|ui|{
             ui.add_space(2.0);
             egui::Frame::none()
