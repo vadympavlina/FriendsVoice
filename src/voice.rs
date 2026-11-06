@@ -50,7 +50,28 @@ impl SpeechGate {
     }
 }
 const FRAME_SIZE: usize = 960; // 20 ms at 48 kHz
-const MAX_AUDIO_QUEUE: usize = 8 * FRAME_SIZE;
+// Never let a temporary WASAPI stall build up half a second of stale speech.
+const MAX_AUDIO_QUEUE: usize = 6 * FRAME_SIZE;
+const MAX_CAPTURE_QUEUE: usize = 6 * FRAME_SIZE;
+const AUDIO_HEADER_BYTES: usize = 20; // 64-bit peer id + 64-bit call id + 32-bit sequence
+/// Circular sequence comparison; reordered and duplicate UDP packets must not re-decode Opus.
+fn sequence_is_newer(candidate: u32, previous: u32) -> bool {
+    let distance = candidate.wrapping_sub(previous);
+    distance != 0 && distance < (1u32 << 31)
+}
+fn parse_audio_packet(packet: &[u8]) -> Option<(u64, u64, u32, &[u8])> {
+    if packet.len() <= AUDIO_HEADER_BYTES { return None; }
+    let user_id = u64::from_be_bytes(packet[0..8].try_into().ok()?);
+    let session_id = u64::from_be_bytes(packet[8..16].try_into().ok()?);
+    let seq = u32::from_be_bytes(packet[16..20].try_into().ok()?);
+    Some((user_id, session_id, seq, &packet[AUDIO_HEADER_BYTES..]))
+}
+struct OpusStream {
+    decoder: Decoder,
+    session_id: u64,
+    last_seq: u32,
+}
+
 
 #[derive(Default)]
 struct SpeakerBuffer {
@@ -95,6 +116,8 @@ pub struct VoiceSession {
     pub packets_sent: Arc<AtomicU64>,
     pub packets_received: Arc<AtomicU64>,
     pub udp_errors: Arc<AtomicU64>,
+    pub duplicate_packets: Arc<AtomicU64>,
+    pub concealed_frames: Arc<AtomicU64>,
     /// Independent session volume for each known user (0..=2).
     pub per_peer_volumes: Arc<Mutex<HashMap<u64, f32>>>,
     active_speakers: Arc<Mutex<HashMap<u64, Instant>>>,
@@ -220,6 +243,8 @@ impl VoiceSession {
         let transmitting = Arc::new(AtomicBool::new(false));
         let packets_received = Arc::new(AtomicU64::new(0));
         let udp_errors = Arc::new(AtomicU64::new(0));
+        let duplicate_packets = Arc::new(AtomicU64::new(0));
+        let concealed_frames = Arc::new(AtomicU64::new(0));
         let samples = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let playback = Arc::new(Mutex::new(HashMap::<u64, SpeakerBuffer>::new()));
         let per_peer_volumes = Arc::new(Mutex::new(HashMap::<u64, f32>::new()));
@@ -242,7 +267,7 @@ impl VoiceSession {
                     frames += 1;
                     queue.push_back(mono);
                 }
-                while queue.len() > SAMPLE_RATE as usize / 2 {
+                while queue.len() > MAX_CAPTURE_QUEUE {
                     queue.pop_front();
                 }
                 let rms = (sum_sq / frames.max(1) as f32).sqrt().min(1.0);
@@ -297,6 +322,8 @@ impl VoiceSession {
                 eprintln!("Opus encoder startup failed");
                 return;
             };
+            let stream_id = rand::random::<u64>().max(1);
+            let mut sequence = 0u32;
             let mut payload = [0u8; 1100];
             let mut pcm = [0f32; FRAME_SIZE];
             while !stop_send.load(Ordering::Relaxed) {
@@ -336,9 +363,12 @@ impl VoiceSession {
                 // No Opus work or UDP traffic while muted or PTT key is released.
                 if !should_transmit { continue; }
                 if let Ok(n) = encoder.encode_float(&pcm, &mut payload) {
-                    let mut packet = Vec::with_capacity(8 + n);
+                    let mut packet = Vec::with_capacity(AUDIO_HEADER_BYTES + n);
                     packet.extend_from_slice(&my_id.to_be_bytes());
+                    packet.extend_from_slice(&stream_id.to_be_bytes());
+                    packet.extend_from_slice(&sequence.to_be_bytes());
                     packet.extend_from_slice(&payload[..n]);
+                    sequence = sequence.wrapping_add(1);
                     let destinations = send_peers.lock().map(|p| p.clone()).unwrap_or_default();
                     for ip in destinations {
                         let addr = SocketAddr::V4(SocketAddrV4::new(ip, AUDIO_PORT));
@@ -355,30 +385,63 @@ impl VoiceSession {
         let receive_count = Arc::clone(&packets_received);
         let error_count = Arc::clone(&udp_errors);
         let speaking_ref = Arc::clone(&active_speakers);
+        let dropped_counter = Arc::clone(&duplicate_packets);
+        let concealed_counter = Arc::clone(&concealed_frames);
         let receive_worker = thread::spawn(move || {
-            let mut decoders: HashMap<u64, Decoder> = HashMap::new();
+            let mut decoders: HashMap<u64, OpusStream> = HashMap::new();
             let mut last_audio: HashMap<u64, Instant> = HashMap::new();
             let mut last_cleanup = Instant::now();
             let mut input = [0u8; 1500];
             let mut decoded = [0f32; 5760];
             while !stop_recv.load(Ordering::Relaxed) {
                 match receiver.recv_from(&mut input) {
-                    Ok((n, addr)) if n > 8 && addr.port() == AUDIO_PORT && {
+                    Ok((n, addr)) if n > AUDIO_HEADER_BYTES && addr.port() == AUDIO_PORT && {
                         match addr.ip() {
                             IpAddr::V4(ip) => recv_peers.lock()
                                 .map(|known| known.contains(&ip)).unwrap_or(false),
                             _ => false,
                         }
                     } => {
-                        let mut id_bytes = [0u8; 8];
-                        id_bytes.copy_from_slice(&input[..8]);
-                        let id = u64::from_be_bytes(id_bytes);
-                        if let std::collections::hash_map::Entry::Vacant(e) = decoders.entry(id) {
+                        let Some((id, session_id, seq, compressed)) =
+                            parse_audio_packet(&input[..n]) else { continue };
+                        if id == my_id { continue; }
+                        let session_changed = !decoders.get(&id)
+                            .is_some_and(|d| d.session_id == session_id);
+                        if session_changed {
                             let Ok(decoder) = Decoder::new(SAMPLE_RATE, Channels::Mono) else { continue; };
-                            e.insert(decoder);
+                            decoders.insert(id, OpusStream {
+                                decoder, session_id, last_seq: seq.wrapping_sub(1),
+                            });
+                            // Never mix stale audio from a previous leave/rejoin session.
+                            if let Ok(mut speakers) = playback.lock() {
+                                speakers.remove(&id);
+                            }
                         }
-                        let Some(decoder) = decoders.get_mut(&id) else { continue; };
-                        if let Ok(samples) = decoder.decode_float(&input[8..n], &mut decoded, false) {
+                        let Some(stream) = decoders.get_mut(&id) else { continue };
+                        if !sequence_is_newer(seq, stream.last_seq) {
+                            dropped_counter.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        let missing = seq.wrapping_sub(stream.last_seq).saturating_sub(1);
+                        // Very short packet loss can be concealed by Opus itself. For larger
+                        // outages reset playback latency rather than playing stale buffered voice.
+                        if missing > 0 && missing <= 2 {
+                            let mut plc = [0f32; FRAME_SIZE];
+                            for _ in 0..missing {
+                                if let Ok(samples) = stream.decoder.decode_float(&[], &mut plc, false) {
+                                    if let Ok(mut speakers) = playback.lock() {
+                                        speakers.entry(id).or_default().add(&plc[..samples]);
+                                    }
+                                    concealed_counter.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        } else if missing > 2 {
+                            if let Ok(mut speakers) = playback.lock() {
+                                speakers.remove(&id);
+                            }
+                        }
+                        stream.last_seq = seq;
+                        if let Ok(samples) = stream.decoder.decode_float(compressed, &mut decoded, false) {
                             // Track audible speech, not merely that a peer is connected.
                             let rms = (decoded[..samples].iter().map(|v| v*v).sum::<f32>()
                                 / samples.max(1) as f32).sqrt();
@@ -435,6 +498,8 @@ impl VoiceSession {
             packets_sent,
             packets_received,
             udp_errors,
+            duplicate_packets,
+            concealed_frames,
             per_peer_volumes,
             active_speakers,
         })
@@ -444,6 +509,23 @@ impl VoiceSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_packet_header_and_ordering() {
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&5u64.to_be_bytes());
+        packet.extend_from_slice(&42u64.to_be_bytes());
+        packet.extend_from_slice(&u32::MAX.to_be_bytes());
+        packet.extend_from_slice(&[0x90, 0xFA, 0x12]);
+        let (user, session, seq, compressed) = parse_audio_packet(&packet).unwrap();
+        assert_eq!((user,session,seq),(5,42,u32::MAX));
+        assert_eq!(compressed, &[0x90,0xFA,0x12]);
+        assert!(parse_audio_packet(&packet[..AUDIO_HEADER_BYTES]).is_none());
+        assert!(sequence_is_newer(0, u32::MAX)); // wrap
+        assert!(!sequence_is_newer(u32::MAX, 0)); // late
+        assert!(!sequence_is_newer(100, 100)); // duplicate
+        assert!(sequence_is_newer(102, 100));
+    }
 
     #[test]
     fn noise_gate_keeps_short_word_endings_and_saves_silence() {
