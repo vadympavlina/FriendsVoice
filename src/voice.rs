@@ -206,6 +206,15 @@ pub fn list_output_devices() -> Vec<String> {
     result
 }
 
+/// Finds an output device by name, falling back to the system default.
+pub fn find_output_device(name: &str) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    if name.is_empty() { return host.default_output_device(); }
+    host.output_devices().ok()
+        .and_then(|mut devices| devices.find(|d| d.name().ok().as_deref() == Some(name)))
+        .or_else(|| host.default_output_device())
+}
+
 fn sample_format_priority(format: SampleFormat) -> usize {
     match format {
         SampleFormat::F32 => 0,
@@ -231,7 +240,7 @@ fn input_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), S
         })
         .ok_or_else(|| "Мікрофон не підтримує 48 кГц у форматі F32/I16/U16.".to_string())
 }
-fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
+pub fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
     device.supported_output_configs()
         .map_err(|e| format!("Налаштування динаміків: {e}"))?
         .filter(|r| sample_format_priority(r.sample_format()) < 9

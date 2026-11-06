@@ -5,6 +5,7 @@ mod voice;
 mod video;
 mod stream;
 mod screen;
+mod sounds;
 mod ui;
 mod branding;
 
@@ -22,6 +23,7 @@ use std::{
 };
 use voice::VoiceSession;
 use screen::{ScreenShare, ShareQuality, ShareSource};
+use sounds::{Sound, SoundPlayer};
 use stream::StreamKind;
 use video::{VideoSession, VideoEvent};
 
@@ -45,6 +47,8 @@ struct Settings {
     /// Last used screen-share quality.
     share_height: usize,
     share_fps: u32,
+    sounds_enabled: bool,
+    sounds_volume: f32,
 }
 
 impl Default for Settings {
@@ -63,6 +67,8 @@ impl Default for Settings {
             gate_threshold: 0.018,
             share_height: 1080,
             share_fps: 30,
+            sounds_enabled: true,
+            sounds_volume: 0.6,
         }
     }
 }
@@ -213,6 +219,13 @@ pub struct FriendsApp {
     share_rate: (Instant, u64, f32),
     /// Tile the user pinned as the big one.
     spotlight: Option<(u64, StreamKind)>,
+    sounds: SoundPlayer,
+    /// States seen on the previous frame, to play a sound exactly when one changes.
+    prev_mic: bool,
+    prev_deaf: bool,
+    prev_camera: bool,
+    prev_sharing: bool,
+    prev_voice_peers: HashSet<u64>,
     ip_copied_at: Option<Instant>,
     /// Cameras reported by Windows as `(index, name)`; filled by a background thread.
     cameras: Arc<Mutex<Vec<(u32, String)>>>,
@@ -227,6 +240,9 @@ impl Default for FriendsApp {
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
         let saved_video_quality = settings.video_quality.min(5);
         let saved_noise_gate = settings.noise_gate;
+        let saved_output_device = settings.output_device.clone();
+        let saved_sounds_enabled = settings.sounds_enabled;
+        let saved_sounds_volume = settings.sounds_volume.clamp(0.0, 1.0);
         let saved_share_height = settings.share_height;
         let saved_share_fps = settings.share_fps;
         let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
@@ -288,6 +304,12 @@ impl Default for FriendsApp {
             },
             share_rate: (Instant::now(), 0, 0.0),
             spotlight: None,
+            sounds: SoundPlayer::new(&saved_output_device, saved_sounds_enabled, saved_sounds_volume),
+            prev_mic: true,
+            prev_deaf: false,
+            prev_camera: false,
+            prev_sharing: false,
+            prev_voice_peers: HashSet::new(),
             ip_copied_at: None,
             cameras: Arc::new(Mutex::new(Vec::new())),
             cameras_loading: Arc::new(AtomicBool::new(false)),
@@ -329,7 +351,19 @@ impl FriendsApp {
         }
         for event in events {
             match event {
-                MeshEvent::Peers(peers) => self.peers = peers,
+                MeshEvent::Peers(peers) => {
+                    let in_voice_now: HashSet<u64> = peers.iter().filter(|p| p.voice).map(|p| p.id).collect();
+                    // Only tell the user about people arriving or leaving while they are in the call themselves.
+                    if self.voice.is_some() && !self.deafened.load(Ordering::Relaxed) {
+                        if in_voice_now.difference(&self.prev_voice_peers).next().is_some() {
+                            self.sounds.play(Sound::PeerJoin);
+                        } else if self.prev_voice_peers.difference(&in_voice_now).next().is_some() {
+                            self.sounds.play(Sound::PeerLeave);
+                        }
+                    }
+                    self.prev_voice_peers = in_voice_now;
+                    self.peers = peers;
+                }
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
                     if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
@@ -384,6 +418,7 @@ impl FriendsApp {
     fn toggle_voice(&mut self) {
         if self.voice.is_some() {
             self.stop_screen_share(None);
+            self.sounds.play(Sound::LeaveSelf);
             self.video.take();
             self.video_textures.clear();
             self.video_seen.clear();
@@ -409,6 +444,7 @@ impl FriendsApp {
         ) {
             Ok(voice) => {
                 self.voice = Some(voice);
+                self.sounds.play(Sound::JoinSelf);
                 self.voice_started_at = Some(Instant::now());
                 mesh.voice(true);
                 // A camera preview opened from Settings has no send targets; replace
@@ -529,6 +565,32 @@ impl FriendsApp {
             let mbps = (bytes.saturating_sub(before)) as f32 * 8.0 / seconds / 1_000_000.0;
             self.share_rate = (Instant::now(), bytes, mbps);
         }
+    }
+
+    /// Plays a sound at the moment mic, sound, camera or screen sharing changes,
+    /// no matter what caused the change (button, Ctrl+M or the global F9 key).
+    fn track_sounds(&mut self) {
+        let mic = self.mic_enabled.load(Ordering::Relaxed);
+        let deaf = self.deafened.load(Ordering::Relaxed);
+        let camera = self.video.as_ref().is_some_and(|v| v.enabled());
+        let sharing = self.screen.is_some();
+        if self.voice.is_some() {
+            if deaf != self.prev_deaf {
+                self.sounds.play(if deaf { Sound::DeafenOn } else { Sound::DeafenOff });
+            } else if mic != self.prev_mic {
+                self.sounds.play(if mic { Sound::MicOn } else { Sound::MicOff });
+            }
+        }
+        if camera != self.prev_camera {
+            self.sounds.play(if camera { Sound::CameraOn } else { Sound::CameraOff });
+        }
+        if sharing != self.prev_sharing {
+            self.sounds.play(if sharing { Sound::ScreenOn } else { Sound::ScreenOff });
+        }
+        self.prev_mic = mic;
+        self.prev_deaf = deaf;
+        self.prev_camera = camera;
+        self.prev_sharing = sharing;
     }
 
     fn start_ptt_capture(&mut self) {
@@ -664,6 +726,7 @@ impl eframe::App for FriendsApp {
         self.poll_ptt_capture();
         self.warn_if_camera_stalled();
         self.watch_screen_share();
+        self.track_sounds();
         self.poll_video(ctx);
         let shortcuts = ctx.input(|i| {
             let ctrl = i.modifiers.ctrl && !i.modifiers.alt;

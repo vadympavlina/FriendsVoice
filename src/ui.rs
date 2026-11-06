@@ -1375,6 +1375,7 @@ impl FriendsApp {
         }
         if devices_before != (self.settings.input_device.clone(), self.settings.output_device.clone()) {
             save_settings(&self.settings);
+            self.sounds.open(&self.settings.output_device);
             if self.voice.is_some() { self.notice("Пристрій збережено. Перезайди у голосовий канал, щоб він почав працювати."); }
         }
         Self::hint(ui, "Вибір зберігається одразу. Після зміни пристрою вийди з голосового каналу й зайди знову.");
@@ -1398,6 +1399,43 @@ impl FriendsApp {
         level_bar(ui, (level * 7.0).min(1.0), ui.available_width().min(420.0));
         if self.voice.is_none() {
             Self::hint(ui, "Зайди в голосовий канал, щоб побачити рівень.");
+        }
+
+        Self::group(ui, "Звуки подій");
+        let mut sounds_on = self.settings.sounds_enabled;
+        if ui.checkbox(&mut sounds_on, "Грати звуки для мікрофона, камери, показу екрана та входу в канал").changed() {
+            self.settings.sounds_enabled = sounds_on;
+            self.sounds.enabled = sounds_on;
+            save_settings(&self.settings);
+        }
+        if sounds_on {
+            Self::field(ui, "Гучність звуків");
+            let mut level = self.settings.sounds_volume;
+            let slider = ui.add(egui::Slider::new(&mut level, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+            if slider.changed() {
+                self.settings.sounds_volume = level;
+                self.sounds.set_volume(level);
+            }
+            if slider.drag_stopped() {
+                save_settings(&self.settings);
+                self.sounds.play(sounds::Sound::MicOn);
+            }
+            ui.add_space(6.0);
+            ui.label(text("Прослухати", 12.5, TEXT3));
+            ui.horizontal_wrapped(|ui| {
+                for (label, sound) in [
+                    ("Мікрофон", sounds::Sound::MicOn), ("Вимкнути мікрофон", sounds::Sound::MicOff),
+                    ("Камера", sounds::Sound::CameraOn), ("Показ екрана", sounds::Sound::ScreenOn),
+                    ("Ти зайшов", sounds::Sound::JoinSelf), ("Друг зайшов", sounds::Sound::PeerJoin),
+                    ("Друг вийшов", sounds::Sound::PeerLeave),
+                ] {
+                    if quiet_button(ui, label) { self.sounds.play(sound); }
+                }
+            });
+            if let Some(error) = &self.sounds.error {
+                ui.label(text(format!("Звуки недоступні: {error}"), 12.5, WARN));
+            }
         }
 
         Self::group(ui, "Коли передавати голос");
