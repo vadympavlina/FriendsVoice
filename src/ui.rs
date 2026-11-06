@@ -918,21 +918,41 @@ impl FriendsApp {
                                 .size(11.8).color(SOFT));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            if icon_button(ui,"Показати / приховати налаштування",Glyph::Settings,
-                                true,self.settings_open,false,39.0){
+                            if icon_button(ui,"Налаштування",Glyph::Settings,
+                                true,self.settings_open,false,37.0){
                                 self.settings_open=!self.settings_open;
+                            }
+                            if icon_button(ui,"Театральний режим · Ctrl+E",Glyph::Focus,
+                                true,self.focus_mode,false,37.0){
+                                self.focus_mode=!self.focus_mode;
+                                if !self.focus_mode {self.chat_unread=0;}
+                            }
+                            if icon_button(ui,"Бічна панель · Ctrl+B",Glyph::Sidebar,
+                                true,self.sidebar_open,false,37.0){
+                                self.sidebar_open=!self.sidebar_open;
                             }
                         });
                     });
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui|{
-                        small_chip(ui,"P2P · DIRECT",PURPLE);
+                        small_chip(ui,if self.focus_mode{"STUDIO FOCUS"}else{"AURORA STUDIO"},PURPLE);
                         small_chip(ui,if self.voice.is_some(){"ГОЛОС АКТИВНИЙ"}else{"ГОТОВИЙ ДО РОЗМОВИ"},
                             if self.voice.is_some(){GREEN}else{BLUE});
+                        if let Some(start) = self.voice_started_at {
+                            let elapsed = start.elapsed().as_secs();
+                            small_chip(ui,&format!("ДЗВІНОК {:02}:{:02}",
+                                elapsed/60,elapsed%60),GREEN);
+                        }
                         if self.mesh.as_ref().is_some_and(|m| !m.local_radmin_ips.is_empty()){
                             small_chip(ui,"RADMIN VPN",GREEN);
                         }
                     });
+                    ui.add_space(7.0);
+                    let activity = self.last_notice.as_ref()
+                        .filter(|(_,time)|time.elapsed().as_secs() < 6)
+                        .map(|(message,_)|message.as_str())
+                        .unwrap_or("Приватна VPN-кімната · без окремого сервера");
+                    ui.label(RichText::new(activity).size(10.7).color(SOFT));
                 });
             ui.add_space(13.0);
 
@@ -942,8 +962,8 @@ impl FriendsApp {
                 ui.add_space(7.0);
                 small_chip(ui,&format!("{}/{}",self.peers.len()+1,MAX_NODES),PURPLE);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                    ui.label(RichText::new("LIVE ROOM").size(10.0)
-                        .strong().color(MUTED));
+                    ui.label(RichText::new(if self.focus_mode{"ТЕАТРАЛЬНИЙ РЕЖИМ"}else{"LIVE ROOM"})
+                        .size(10.0).strong().color(if self.focus_mode{PURPLE}else{MUTED}));
                 });
             });
             ui.add_space(8.0);
@@ -955,13 +975,22 @@ impl FriendsApp {
                 else if gallery_width>=370.0 {2usize} else {1usize};
             let gap=11.0;
             let visible=self.peers.len().saturating_add(1).min(MAX_NODES);
-            let total=visible.max(if columns>1{columns}else{1}).min(MAX_NODES);
+            let total=if self.focus_mode {visible}
+                else {visible.max(if columns>1{columns}else{1})}.min(MAX_NODES);
             let rows=total.div_ceil(columns);
             let regular_tile_width=((gallery_width-gap*(columns-1) as f32)
                 /columns as f32).max(110.0);
-            let row_height=(regular_tile_width*0.53).clamp(132.0,197.0);
+            let row_height=if self.focus_mode {
+                (regular_tile_width*0.65).clamp(160.0,285.0)
+            } else {
+                (regular_tile_width*0.53).clamp(132.0,197.0)
+            };
             let needed_height=rows as f32*row_height+rows.saturating_sub(1) as f32*gap;
-            let max_gallery_height=((ui.available_height()-310.0)*0.8).clamp(135.0,340.0);
+            let max_gallery_height=if self.focus_mode {
+                (ui.available_height()-120.0).clamp(185.0,670.0)
+            } else {
+                ((ui.available_height()-310.0)*0.8).clamp(135.0,340.0)
+            };
             let gallery_height=needed_height.min(max_gallery_height);
             egui::ScrollArea::vertical()
                 .id_salt("aurora_gallery")
