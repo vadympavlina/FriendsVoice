@@ -109,7 +109,7 @@ fn handle(mut stream: TcpStream, id: u64, peers: Peers, password: String) {
     if write_packet(&mut stream, &Packet::Welcome {
         users: users(&peers),
         user_id: id,
-        voice_token: token,
+        voice_token: format!("{token:032x}"),
     }).is_err() {
         peers.lock().unwrap().remove(&id);
         return;

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Packet {
     Hello { nickname: String, password: String },
-    Welcome { users: Vec<UserInfo>, user_id: u64, voice_token: u128 },
+    Welcome { users: Vec<UserInfo>, user_id: u64, voice_token: String },
     SendChat { text: String },
     Chat { from: String, text: String },
     Users { users: Vec<UserInfo> },
@@ -34,14 +34,14 @@ mod tests {
         let packet = Packet::Welcome {
             users: vec![UserInfo { id: 3, nickname: "Друг".into() }],
             user_id: 3,
-            voice_token: 123456789123456789123456789u128,
+            voice_token: format!("{:032x}", 123456789123456789123456789u128),
         };
         let json = serde_json::to_string(&packet).unwrap();
         let parsed: Packet = serde_json::from_str(&json).unwrap();
         match parsed {
             Packet::Welcome { users, user_id, voice_token } => {
                 assert_eq!(user_id, 3);
-                assert_eq!(voice_token, 123456789123456789123456789u128);
+                assert_eq!(voice_token, format!("{:032x}", 123456789123456789123456789u128));
                 assert_eq!(users[0].nickname, "Друг");
             }
             _ => panic!("wrong type"),

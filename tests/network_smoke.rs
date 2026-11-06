@@ -36,7 +36,7 @@ fn login(port: u16, name: &str) -> (TcpStream, BufReader<TcpStream>, u64, u128) 
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     match serde_json::from_str::<Packet>(&line).unwrap() {
-        Packet::Welcome { user_id, voice_token, .. } => (stream, reader, user_id, voice_token),
+        Packet::Welcome { user_id, voice_token, .. } => (stream, reader, user_id, u128::from_str_radix(&voice_token, 16).unwrap()),
         unexpected => panic!("Unexpected handshake response {unexpected:?}"),
     }
 }

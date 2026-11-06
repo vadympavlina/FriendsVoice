@@ -127,7 +127,15 @@ fn network_worker(
     }
     match serde_json::from_str::<Packet>(&line) {
         Ok(Packet::Welcome { users, voice_token, .. }) => {
-            let _ = send_events.send(Event::Connected { users, token: voice_token, addr });
+            match u128::from_str_radix(&voice_token, 16) {
+                Ok(token) => {
+                    let _ = send_events.send(Event::Connected { users, token, addr });
+                }
+                Err(_) => {
+                    let _ = send_events.send(Event::Disconnected("Недопустимий токен від сервера".into()));
+                    return;
+                }
+            }
         }
         Ok(Packet::Error { text }) => {
             let _ = send_events.send(Event::Disconnected(text));
