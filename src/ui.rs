@@ -357,136 +357,193 @@ fn peer_tile(
 
 impl FriendsApp {
     pub(super) fn neon_sidebar(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false,false]).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                // Logo is drawn vectorially to prevent tofu glyphs on Windows.
-                let (r,_) = ui.allocate_exact_size(Vec2::new(42.0,42.0),Sense::hover());
-                ui.painter().circle_filled(r.center(),19.0,PURPLE.linear_multiply(0.25));
-                ui.painter().circle_stroke(r.center(),18.0,Stroke::new(2.3,PURPLE));
-                glyph(ui,Glyph::Headphones,r,BRIGHT);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Friends Voice").size(21.0).strong().color(BRIGHT));
-                    ui.label(RichText::new("SERVERLESS · RADMIN VPN").size(9.5).color(MUTED));
-                });
-            });
-            ui.add_space(15.0);
-            card().show(ui,|ui| {
-                ui.horizontal(|ui| {
-                    dot(ui,if self.mesh.is_some(){GREEN}else{RED},4.0);
-                    ui.label(RichText::new(if self.mesh.is_some(){"P2P вузол працює"}else{"P2P недоступний"})
-                        .size(14.0).strong().color(BRIGHT));
-                });
-                ui.add_space(3.0);
-                ui.label(RichText::new(if self.mesh.is_some(){
-                    "Прямий зв'язок між друзями без центрального сервера."
-                } else {"Не вдалося запустити P2P. Перевір UDP-порт 45888."}).size(11.0).color(SOFT));
-                ui.horizontal_wrapped(|ui| {
-                    small_chip(ui,"P2P MESH",PURPLE);
-                    small_chip(ui,"БЕЗ СЕРВЕРА",BLUE);
-                });
-                if self.mesh.is_none() {
-                    if let Some(message)=&self.network_error {
-                        ui.label(RichText::new(message).size(11.0).color(RED));
-                    }
-                    if outline_button(ui,"Спробувати ще раз") {self.retry_network();}
-                }
-            });
-            ui.add_space(9.0);
-            card().show(ui,|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Radmin VPN").strong().size(13.0).color(BRIGHT));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                        small_chip(ui,if self.mesh.as_ref().is_some_and(|m|!m.local_radmin_ips.is_empty()){
-                            "ВИЯВЛЕНО"
-                        } else {"НЕ ЗНАЙДЕНО"},
-                            if self.mesh.as_ref().is_some_and(|m|!m.local_radmin_ips.is_empty()){GREEN}else{MUTED});
-                    });
-                });
-                ui.label(text_caption("Твої віртуальні IP-адреси"));
-                let ips=self.mesh.as_ref().map(|m|m.local_radmin_ips.as_slice()).unwrap_or(&[]);
-                if ips.is_empty() {
-                    ui.label(RichText::new("26.x.x.x не знайдено — перевір Radmin VPN.")
-                        .size(11.0).color(SOFT));
-                } else {
-                    for ip in ips {
-                        ui.horizontal(|ui|{
-                            dot(ui,BLUE,2.5);
-                            ui.label(RichText::new(ip.to_string()).size(12.0).strong().color(BRIGHT));
-                        });
-                    }
-                }
-            });
-            ui.add_space(12.0);
-            section(ui,"ГОЛОСОВИЙ КАНАЛ");
-            soft_card().show(ui,|ui|{
+        egui::ScrollArea::vertical()
+            .id_salt("aurora_sidebar")
+            .auto_shrink([false,false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add_space(5.0);
+
+                // A native vector mark; does not depend on unavailable emoji fonts.
                 ui.horizontal(|ui|{
-                    let (r,_)=ui.allocate_exact_size(Vec2::splat(25.0),Sense::hover());
-                    glyph(ui,Glyph::Volume,r,BLUE);
-                    ui.label(RichText::new("Загальний").size(14.0).strong().color(BRIGHT));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                        if self.voice.is_some(){dot(ui,GREEN,3.0);}
-                    });
-                });
-            });
-            ui.add_space(7.0);
-            let joined=self.voice.is_some();
-            if tinted_button(ui,if joined{"Залишити голос"}else{"Приєднатися до голосу"},
-                if joined{Color32::from_rgb(157,50,75)}else{PURPLE},
-                self.mesh.is_some(),37.0).clicked() {
-                self.toggle_voice();
-            }
-            ui.add_space(15.0);
-            section(ui,&format!("ДРУЗІ В МЕРЕЖІ  ({}/{})",self.peers.len()+1,MAX_NODES));
-            card().show(ui,|ui| {
-                ui.horizontal(|ui| {
-                    avatar(ui,&self.settings.nickname,33.0,PURPLE);
+                    let (r,_) = ui.allocate_exact_size(Vec2::splat(49.0),Sense::hover());
+                    ui.painter().rect_filled(r,Rounding::same(15.0),PURPLE);
+                    for offset in [-13.0f32,-5.0,4.0,12.0] {
+                        let height = if offset == -5.0 {21.0} else if offset == 4.0 {28.0} else {13.0};
+                        ui.painter().line_segment(
+                            [Pos2::new(r.center().x+offset,r.center().y-height*0.5),
+                             Pos2::new(r.center().x+offset,r.center().y+height*0.5)],
+                            Stroke::new(3.0,BRIGHT));
+                    }
+                    ui.add_space(2.0);
                     ui.vertical(|ui|{
-                        ui.label(RichText::new(format!("{} (ти)",self.settings.nickname)).strong().size(12.5));
-                        ui.label(text_caption(if self.voice.is_some(){"У голосі"}else{"У мережі"}));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                        dot(ui,GREEN,3.5);
+                        ui.label(RichText::new("FRIENDS").size(20.0).strong().color(BRIGHT));
+                        ui.label(RichText::new("VOICE  /  AURORA").size(10.2).strong().color(BLUE));
                     });
                 });
-                for (i,p) in self.peers.iter().enumerate() {
-                    ui.add_space(7.0);
+                ui.add_space(5.0);
+                ui.label(RichText::new("Твій приватний простір для розмов")
+                    .size(11.4).color(SOFT));
+                ui.add_space(16.0);
+
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(25,42,55))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(43,98,99)))
+                    .rounding(Rounding::same(16.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            dot(ui,if self.mesh.is_some(){GREEN}else{RED},4.0);
+                            ui.label(RichText::new(
+                                if self.mesh.is_some(){"P2P мережа активна"}else{"Немає з'єднання"})
+                                .size(12.8).strong().color(BRIGHT));
+                        });
+                        ui.add_space(3.0);
+                        ui.label(RichText::new("Без сервера. Прямий зв'язок через Radmin VPN.")
+                            .size(11.3).color(SOFT));
+                        ui.add_space(5.0);
+                        ui.horizontal_wrapped(|ui|{
+                            small_chip(ui,"MESH",GREEN);
+                            small_chip(ui,"PRIVATE",BLUE);
+                        });
+                        if self.mesh.is_none(){
+                            if let Some(error)=&self.network_error {
+                                ui.label(RichText::new(error).size(11.0).color(RED));
+                            }
+                            if tinted_button(ui,"Відновити з'єднання",PURPLE,true,35.0).clicked(){
+                                self.retry_network();
+                            }
+                        }
+                    });
+                ui.add_space(18.0);
+                section(ui,"МІЙ ПРОСТІР");
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(35,34,66))
+                    .stroke(Stroke::new(1.0,PURPLE.linear_multiply(0.56)))
+                    .rounding(Rounding::same(17.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            let (r,_) = ui.allocate_exact_size(Vec2::splat(34.0),Sense::hover());
+                            ui.painter().rect_filled(r,Rounding::same(11.0),
+                                PURPLE.linear_multiply(0.5));
+                            glyph(ui,Glyph::Headphones,r,BRIGHT);
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new("Загальний").strong().size(15.0).color(BRIGHT));
+                                ui.label(text_caption("VOICE CHANNEL  /  01"));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                dot(ui,if self.voice.is_some(){GREEN}else{PURPLE},3.0);
+                            });
+                        });
+                        ui.add_space(8.0);
+                        let joined=self.voice.is_some();
+                        if tinted_button(ui,
+                            if joined{"Залишити голосовий канал"}else{"Приєднатися до голосу"},
+                            if joined{Color32::from_rgb(136,52,79)}else{PURPLE},
+                            self.mesh.is_some(),41.0).clicked() {
+                            self.toggle_voice();
+                        }
+                    });
+
+                ui.add_space(19.0);
+                ui.horizontal(|ui|{
+                    section(ui,"ДРУЗІ ОНЛАЙН");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                        small_chip(ui,&format!("{}/{}",self.peers.len()+1,MAX_NODES),GREEN);
+                    });
+                });
+                card().show(ui,|ui|{
                     ui.horizontal(|ui|{
-                        avatar(ui,&p.name,33.0,peer_color(i+1));
+                        avatar(ui,&self.settings.nickname,39.0,PURPLE);
+                        ui.add_space(2.0);
                         ui.vertical(|ui|{
-                            ui.label(RichText::new(&p.name).strong().size(12.5));
-                            ui.label(text_caption(if p.protocol != PROTOCOL_VERSION {
-                                "Потрібне оновлення 0.8"
-                            } else if self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)) {
-                                "● Говорить зараз"
-                            } else if p.voice { "У голосі" } else { "Онлайн" }));
+                            ui.label(RichText::new(format!("{} · ти",self.settings.nickname))
+                                .size(13.2).strong().color(BRIGHT));
+                            ui.label(text_caption(if self.voice.is_some(){
+                                "В голосовому каналі"
+                            }else{"У мережі"}));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            dot(ui,if p.voice{GREEN}else{BLUE},3.5);
+                            dot(ui,GREEN,3.5);
                         });
                     });
+                    for (i,peer) in self.peers.iter().enumerate(){
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.horizontal(|ui|{
+                            avatar(ui,&peer.name,38.0,peer_color(i+1));
+                            ui.add_space(2.0);
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(&peer.name).size(12.8)
+                                    .strong().color(BRIGHT));
+                                let state=if peer.protocol!=PROTOCOL_VERSION {
+                                    "Несумісна версія"
+                                }else if self.voice.as_ref().is_some_and(|v|v.is_speaking(peer.id)){
+                                    "Говорить зараз"
+                                }else if peer.voice{"У голосі"}else{"У мережі"};
+                                ui.label(RichText::new(state).size(10.9)
+                                    .color(if peer.protocol!=PROTOCOL_VERSION{RED}else{SOFT}));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                dot(ui,if peer.protocol!=PROTOCOL_VERSION{RED}
+                                    else if peer.voice{GREEN}else{BLUE},3.0);
+                            });
+                        });
+                    }
+                    if self.peers.is_empty() {
+                        ui.add_space(9.0);
+                        ui.label(RichText::new("Тут з'являться твої друзі.")
+                            .size(11.5).color(MUTED));
+                    }
+                });
+
+                ui.add_space(17.0);
+                section(ui,"RADMIN VPN");
+                soft_card().show(ui,|ui|{
+                    ui.horizontal(|ui|{
+                        let (r,_) = ui.allocate_exact_size(Vec2::splat(25.0),Sense::hover());
+                        glyph(ui,Glyph::Network,r,BLUE);
+                        ui.label(RichText::new("Мережеві адреси").size(12.2)
+                            .strong().color(BRIGHT));
+                    });
+                    let ips=self.mesh.as_ref().map(|m|m.local_radmin_ips.as_slice()).unwrap_or(&[]);
+                    if ips.is_empty() {
+                        ui.label(RichText::new("Адресу 26.x.x.x не знайдено")
+                            .size(11.3).color(MUTED));
+                    }else{
+                        for ip in ips {
+                            ui.horizontal(|ui|{
+                                dot(ui,GREEN,2.6);
+                                ui.label(RichText::new(ip.to_string()).size(12.6)
+                                    .strong().color(BRIGHT));
+                            });
+                        }
+                    }
+                });
+
+                ui.add_space(17.0);
+                section(ui,"ДОДАТИ ДРУГА");
+                ui.label(text_caption("IP-адреса друга в Radmin VPN"));
+                let entry=ui.add(
+                    egui::TextEdit::singleline(&mut self.friend_ip)
+                        .hint_text("26.XX.XX.XX")
+                        .desired_width(ui.available_width())
+                );
+                if entry.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)){
+                    self.add_friend();
                 }
-                if self.peers.is_empty(){
-                    ui.add_space(6.0);
-                    ui.label(text_caption("Друзі з'являться тут після підключення."));
+                if tinted_button(ui,"Знайти за IP",Color32::from_rgb(66,101,153),
+                    self.mesh.is_some(),37.0).clicked() {
+                    self.add_friend();
                 }
+                ui.add_space(18.0);
+                ui.label(RichText::new("FRIENDS VOICE 0.9  ·  DESKTOP")
+                    .size(10.1).color(MUTED));
+                ui.add_space(14.0);
             });
-            ui.add_space(14.0);
-            section(ui,"ПОШУК ДРУЗІВ");
-            ui.label(RichText::new("Якщо пошук не спрацював, додай IP друга один раз.")
-                .size(11.0).color(SOFT));
-            let input=ui.add(egui::TextEdit::singleline(&mut self.friend_ip)
-                .hint_text("26.x.x.x")
-                .desired_width(ui.available_width()));
-            if input.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)) {
-                self.add_friend();
-            }
-            if tinted_button(ui,"Знайти за IP",Color32::from_rgb(81,87,185),
-                self.mesh.is_some(),32.0).clicked(){self.add_friend();}
-            ui.add_space(18.0);
-        });
     }
+
 
     pub(super) fn neon_settings(&mut self,ui:&mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false,false]).show(ui,|ui|{
