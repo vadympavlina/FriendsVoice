@@ -373,11 +373,10 @@ fn paint_tile(
             let visible = (TILE_ASPECT / aspect).clamp(0.01, 1.0);
             Rect::from_min_max(Pos2::new(0.0, (1.0 - visible) * 0.5), Pos2::new(1.0, (1.0 + visible) * 0.5))
         };
-        let mut mesh = egui::Mesh::with_texture(frame.id());
-        mesh.add_rect_with_uv(rect, uv, Color32::WHITE);
-        // Round the video corners by clipping through a rounded mask is not
-        // available natively; inset by 0 and let the outline hide the corners.
-        p.add(egui::Shape::mesh(mesh));
+        let mut shape = egui::epaint::RectShape::filled(rect, rounding, Color32::WHITE);
+        shape.fill_texture_id = frame.id();
+        shape.uv = uv;
+        p.add(shape);
     } else {
         let diameter = (rect.height() * 0.36).clamp(30.0, 120.0);
         paint_avatar(&p, rect.center() - Vec2::new(0.0, 6.0), diameter, name);
@@ -775,6 +774,7 @@ impl FriendsApp {
         let mic = self.mic_enabled.load(Ordering::Relaxed);
         let deaf = self.deafened.load(Ordering::Relaxed);
         let camera = self.video.as_ref().is_some_and(|v| v.enabled());
+        let camera_starting = self.video.as_ref().is_some_and(|v| v.starting());
         let chat_button = self.focus_mode;
         // Shrink the controls instead of clipping them in narrow windows.
         let room = ui.available_width() - 24.0;
@@ -801,9 +801,11 @@ impl FriendsApp {
                     self.deafened.store(!deaf, Ordering::Relaxed);
                 }
                 if round_button(ui, if camera { ph::VIDEO_CAMERA } else { ph::VIDEO_CAMERA_SLASH },
-                    if camera { "Вимкнути камеру" } else { "Увімкнути камеру" },
-                    if camera { TEXT } else { RAISED }, if camera { STAGE } else { TEXT },
-                    self.video.is_some(), d) {
+                    if camera_starting { "Камера запускається. Натисни, щоб скасувати." }
+                        else if camera { "Вимкнути камеру" } else { "Увімкнути камеру" },
+                    if camera_starting { AMBER } else if camera { TEXT } else { RAISED },
+                    if camera_starting { AMBER_INK } else if camera { STAGE } else { TEXT },
+                    self.mesh.is_some(), d) {
                     self.toggle_camera();
                 }
                 round_button(ui, ph::MONITOR_ARROW_UP, "Демонстрація екрана поки недоступна",
@@ -1161,47 +1163,81 @@ impl FriendsApp {
     }
 
     fn settings_video(&mut self, ui: &mut Ui) {
-        Self::group(ui, "Камера (Beta)");
-        Self::field(ui, "Пристрій");
-        let previous = self.camera_index.load(Ordering::Relaxed);
-        let mut chosen = previous;
-        egui::ComboBox::from_id_salt("fv_cam_select")
-            .selected_text(format!("Камера {}", chosen + 1))
-            .show_ui(ui, |ui| {
-                for index in 0..4u32 {
-                    ui.selectable_value(&mut chosen, index, format!("Камера {}", index + 1));
-                }
-            });
-        if chosen != previous { self.update_camera_device(chosen); }
-        Self::hint(ui, "Якщо камера не відкривається, спробуй інший номер.");
-
-        Self::field(ui, "Якість");
-        let original = self.video_quality.load(Ordering::Relaxed);
-        let mut selected = original;
-        let label = |q: u32| match q {
-            0 => "Економія · 320×180, 5 к/с",
-            2 => "Чіткіше · 480×270, 8 к/с",
-            _ => "Баланс · 320×180, 9 к/с",
-        };
-        egui::ComboBox::from_id_salt("fv_video_quality").selected_text(label(original))
-            .show_ui(ui, |ui| {
-                for q in 0..3u32 { ui.selectable_value(&mut selected, q, label(q)); }
-            });
-        if selected != original { self.update_video_quality(selected); }
-
-        ui.add_space(12.0);
+        let cameras = self.cameras.lock().map(|list| list.clone()).unwrap_or_default();
+        let loading = self.cameras_loading.load(Ordering::Relaxed);
+        Self::group(ui, "Камера");
         let on = self.video.as_ref().is_some_and(|v| v.enabled());
+        let starting = self.video.as_ref().is_some_and(|v| v.starting());
+
+        // Live preview: only you see it until you are in a call.
+        let width = ui.available_width().min(460.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / TILE_ASPECT), Sense::hover());
+        let local_id = self.mesh.as_ref().map(|m| m.id);
+        let texture = local_id.and_then(|id| self.video_textures.get(&id));
+        let note = if starting { Some("запуск камери") } else if !on { Some("камеру вимкнено") } else { None };
+        paint_tile(ui, rect, &self.settings.nickname.clone(), note, false, texture);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             if on {
                 if pill_button(ui, "Вимкнути камеру", RED, Color32::WHITE, Vec2::new(0.0, 34.0), true) {
                     self.toggle_camera();
                 }
-            } else if primary_button(ui, "Увімкнути камеру", self.video.is_some()) {
+            } else if primary_button(ui, "Перевірити камеру", self.mesh.is_some()) {
                 self.toggle_camera();
             }
         });
-        Self::hint(ui, "Камера вмикається лише вручну й тільки в голосовому каналі.");
+        Self::hint(ui, if self.voice.is_some() {
+            "Ти в голосовому каналі: друзі бачать те, що ти бачиш тут."
+        } else {
+            "Це перегляд лише для тебе. Друзям відео не надсилається, поки ти не зайдеш у голосовий канал."
+        });
+
+        Self::group(ui, "Пристрій");
+        Self::field(ui, "Камера");
+        let previous = self.camera_index.load(Ordering::Relaxed);
+        let mut chosen = previous;
+        let current_name = cameras.iter().find(|(index, _)| *index == previous)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| if cameras.is_empty() {
+                if loading { "Пошук камер…".into() } else { "Камер не знайдено".into() }
+            } else { format!("Камера {}", previous + 1) });
+        ui.add_enabled_ui(!cameras.is_empty(), |ui| {
+            egui::ComboBox::from_id_salt("fv_cam_select")
+                .width(ui.available_width().min(420.0))
+                .selected_text(current_name)
+                .show_ui(ui, |ui| {
+                    for (index, name) in &cameras {
+                        ui.selectable_value(&mut chosen, *index, name);
+                    }
+                });
+        });
+        if chosen != previous { self.update_camera_device(chosen); }
+        ui.add_space(4.0);
+        if quiet_button(ui, if loading { "Шукаю…" } else { "Оновити список" }) {
+            self.refresh_cameras();
+        }
+        if cameras.is_empty() && !loading {
+            Self::hint(ui, "Windows не повідомила про жодну камеру. Підключи її та натисни «Оновити список». Також перевір у Параметрах Windows: Конфіденційність → Камера → дозволити доступ класичним програмам.");
+        } else {
+            Self::hint(ui, "Якщо камера не вмикається, вибери іншу або закрий програми, що її займають (Zoom, Teams, браузер).");
+        }
+
+        Self::group(ui, "Якість");
+        let original = self.video_quality.load(Ordering::Relaxed);
+        let mut selected = original;
+        let label = |q: u32| match q {
+            0 => "Економія · 320×180, 6 к/с",
+            2 => "Висока · 640×360, 12 к/с",
+            _ => "Баланс · 480×270, 10 к/с",
+        };
+        egui::ComboBox::from_id_salt("fv_video_quality").width(260.0).selected_text(label(original))
+            .show_ui(ui, |ui| {
+                for q in 0..3u32 { ui.selectable_value(&mut selected, q, label(q)); }
+            });
+        if selected != original { self.update_video_quality(selected); }
+        Self::hint(ui, "Висока якість надсилає втричі більше даних кожному другу. Якщо відео смикається, обери «Економію». Камера підганяється під формат 16:9.");
         if let Some(video) = &self.video {
+            ui.add_space(6.0);
             Self::hint(ui, format!("Кадрів: надіслано {}, отримано {}, відновлено після втрат {}",
                 video.frames_sent.load(Ordering::Relaxed),
                 video.frames_received.load(Ordering::Relaxed),

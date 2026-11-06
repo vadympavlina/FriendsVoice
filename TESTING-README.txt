@@ -1,45 +1,46 @@
-FRIENDS VOICE 1.0 - AURORA STUDIO - WINDOWS 10/11 X64
-======================================================
+FRIENDS VOICE - WINDOWS 10/11 X64
+=================================
 
 Native Rust desktop P2P voice, chat and webcam for up to 5 friends.
 No server, no web browser, no installer. Radmin VPN required.
-Extract ZIP, run friends-voice.exe on each participating computer.
+Extract the ZIP and run friends-voice.exe on every participating computer.
 
-AURORA STUDIO 1.0
- - Native redesigned dark UI, Windows fonts and vector window icon.
- - Ctrl+B toggles friends/sidebar.
- - Ctrl+E toggles video theatre / focus mode.
- - Ctrl+F opens live chat search (author + message text).
- - Esc closes search, settings or theatre.
- - Ctrl+M toggles microphone in app; F9 toggles mic globally in voice.
- - Push-to-Talk configurable under Settings > Audio (F8 default).
- - Focus mode displays large webcam tiles + unread message count.
- - Compact call controls on narrow desktops; full labels and live mic
-   level on wide desktops.
- - Local call timer, speaker glows, room status, quick copy of VPN IP.
- - General settings allow toggling/resetting the new layout.
- - All P2P voice and webcam transport from 0.8 remains compatible.
+LAYOUT
+ - Left: voice channel with participants, friends in the network,
+   your Radmin VPN address (copy button), user bar (mic, sound, settings).
+ - Middle: call stage with participant tiles and call controls.
+ - Right: chat with search. Repeated system notices are folded (x3).
+ - Settings is a full page: Sound, Video, General, About.
 
-RECOMMENDED VISUAL CHECKLIST
- 1. Start app at 1060x690, 1366x768 and 1920x1080 where possible.
- 2. Open and close Settings, then resize the right panel.
- 3. Hide the left sidebar (Ctrl+B) and show it again.
- 4. Join the voice channel; test MIC, DEAFEN and CAMERA buttons.
- 5. Check the timer and local mic audio meter with a real microphone.
- 6. Switch to theatre (Ctrl+E). Check 1, 2, 3 and 5-user layouts.
- 7. Send a few messages; search by name or text (Ctrl+F).
- 8. In theatre, ask a friend to send chat: unread count should grow.
- 9. Check empty-room invitation and copy Radmin IP button.
-10. Change profile name, select audio devices and PTT key.
-11. Verify UDP voice (45889), discovery (45888), webcam (45890)
-    under trusted private Radmin VPN traffic.
-12. Verify friends can leave and rejoin without ending others' calls.
-13. Try Windows display scaling at 100%, 125% or 150%.
+SHORTCUTS
+ Ctrl+M mic | Ctrl+B sidebar | Ctrl+E theatre mode | Ctrl+F chat search
+ Esc closes search, settings or theatre | F9 global mic | F8 Push-to-Talk
 
-IMPORTANT
- - Webcam is experimental JPEG/UDP. Screen share is NOT implemented.
- - Echo cancellation and end-to-end encryption are NOT available.
- - No strong peer identity verification. Only trusted private VPN.
- - Chat history is in memory and isn't persisted after app close.
- - Automatic CI tests validate compilation and algorithms, not real
-   Windows webcam/audio performance or appearance on your monitor.
+WEBCAM CHECKLIST (please test on a real PC)
+ 1. Settings > Video: your camera should appear by name. Press
+    "Check camera": the preview is mirrored and nobody else can see it.
+ 2. Leave the Video page without joining a call: the camera must switch off
+    (camera light goes out).
+ 3. Try the three quality levels. Compare delay and smoothness.
+ 4. Join a call with a friend and turn the camera on from the call bar.
+    The friend must see you unmirrored and not stretched.
+ 5. Switch camera in Settings while it is on: it should restart quickly and
+    the window must not freeze.
+ 6. Test a camera that is used by another app: you should get a clear
+    message with the Windows privacy hint, not a silent failure.
+ 7. Test a laptop camera and, if possible, an external USB camera.
+
+GENERAL CHECKLIST
+ 1. Start at 960x620, 1366x768 and 1920x1080; try 125% and 150% scaling.
+ 2. Join the voice channel, test mic, sound, Ctrl+M and F9.
+ 3. Theatre mode (Ctrl+E) with 1, 2, 3 and 5 people; unread chat badge.
+ 4. Friends can leave and rejoin without ending the call for others.
+ 5. UDP 45888 (chat/discovery), 45889 (voice), 45890 (webcam) must be
+    reachable inside the trusted VPN only.
+
+KNOWN LIMITS
+ - Webcam is JPEG over UDP. Screen share is NOT implemented.
+ - No echo cancellation, no end-to-end encryption, no identity checks.
+ - Chat history is in memory only.
+ - Automated CI checks compilation and algorithms, not real webcam/audio
+   behaviour or how the UI looks on your monitor.
