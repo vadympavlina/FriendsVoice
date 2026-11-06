@@ -34,6 +34,21 @@ pub const MUTE_VK: i32 = 0x78; // F9
 fn allowed_to_transmit(master_on: bool, push_to_talk: bool, key_down: bool) -> bool {
     master_on && (!push_to_talk || key_down)
 }
+/// Speech gate is opt-in. Hold a short tail after speech so quiet word endings
+/// are not clipped and verify that Push-to-Talk always takes precedence.
+struct SpeechGate {
+    silent_frames: usize,
+}
+impl SpeechGate {
+    fn new() -> Self { Self { silent_frames: 20 } }
+    fn allow(&mut self, samples: &[f32], threshold: f32) -> bool {
+        let energy = samples.iter().map(|x| x * x).sum::<f32>() / samples.len().max(1) as f32;
+        let active = energy.sqrt() >= threshold.clamp(0.002, 0.12);
+        if active { self.silent_frames = 0; }
+        else { self.silent_frames = self.silent_frames.saturating_add(1); }
+        active || self.silent_frames <= 12 // 240ms hold time
+    }
+}
 const FRAME_SIZE: usize = 960; // 20 ms at 48 kHz
 const MAX_AUDIO_QUEUE: usize = 8 * FRAME_SIZE;
 
@@ -159,6 +174,8 @@ impl VoiceSession {
         mic_enabled: Arc<AtomicBool>,
         push_to_talk: Arc<AtomicBool>,
         ptt_key: Arc<AtomicI32>,
+        noise_gate: Arc<AtomicBool>,
+        gate_threshold: Arc<AtomicU32>,
         deafened: Arc<AtomicBool>,
         volume: Arc<AtomicU32>,
     ) -> Result<Self, String> {
@@ -266,6 +283,7 @@ impl VoiceSession {
         let tx_indicator = Arc::clone(&transmitting);
         let send_worker = thread::spawn(move || {
             let mut last_mute_press = false;
+            let mut speech_gate = SpeechGate::new();
             let Ok(mut encoder) = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip) else {
                 eprintln!("Opus encoder startup failed");
                 return;
@@ -293,11 +311,18 @@ impl VoiceSession {
                     thread::sleep(Duration::from_millis(4));
                     continue;
                 }
-                let should_transmit = allowed_to_transmit(
+                let ptt = push_to_talk.load(Ordering::Relaxed);
+                let mut should_transmit = allowed_to_transmit(
                     mic.load(Ordering::Relaxed),
-                    push_to_talk.load(Ordering::Relaxed),
+                    ptt,
                     key_is_down(ptt_key.load(Ordering::Relaxed)),
                 );
+                // Optional noise gate only in always-on mode. In PTT mode the key
+                // decides when to transmit, even if the player speaks quietly.
+                if should_transmit && !ptt && noise_gate.load(Ordering::Relaxed) {
+                    let threshold = f32::from_bits(gate_threshold.load(Ordering::Relaxed));
+                    should_transmit = speech_gate.allow(&pcm, threshold);
+                }
                 tx_indicator.store(should_transmit, Ordering::Relaxed);
                 // No Opus work or UDP traffic while muted or PTT key is released.
                 if !should_transmit { continue; }
@@ -396,6 +421,17 @@ impl VoiceSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn noise_gate_keeps_short_word_endings_and_saves_silence() {
+        let mut gate = SpeechGate::new();
+        let silent = [0.0f32; FRAME_SIZE];
+        let voice = [0.035f32; FRAME_SIZE];
+        assert!(!gate.allow(&silent, 0.02));
+        assert!(gate.allow(&voice, 0.02));
+        for _ in 0..12 { assert!(gate.allow(&silent, 0.02)); }
+        assert!(!gate.allow(&silent, 0.02));
+    }
 
     #[test]
     fn ptt_logic() {
