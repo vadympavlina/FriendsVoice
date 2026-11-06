@@ -379,7 +379,15 @@ struct TileView<'a> {
     salt: (u64, StreamKind),
 }
 
-fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Option<&egui::TextureHandle>) -> Response {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TileAction {
+    /// Fill the whole window with this stream.
+    Expand,
+    /// Fill the whole monitor.
+    Fullscreen,
+}
+
+fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Option<&egui::TextureHandle>) -> (Response, Option<TileAction>) {
     let response = ui.interact(rect, egui::Id::new(("tile", view.salt.0, view.salt.1.index())), Sense::click());
     let p = ui.painter_at(rect);
     let rounding = Rounding::same(if view.small { 8.0 } else { 12.0 });
@@ -433,7 +441,7 @@ fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Option<&egui:
     p.galley(pill.min + Vec2::new(7.0, 3.0), galley, TEXT);
 
     if let Some(glyph) = view.badge {
-        let center = Pos2::new(rect.right() - 22.0, rect.top() + 22.0);
+        let center = Pos2::new(rect.left() + 22.0, rect.top() + 22.0);
         p.circle_filled(center, 14.0, RED);
         p.text(center, Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), Color32::WHITE);
     }
@@ -447,7 +455,42 @@ fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Option<&egui:
     if response.hovered() && view.small {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    response
+
+    // Hover buttons: only for tiles that actually show a picture.
+    let mut action = None;
+    if video.is_some() && (response.hovered() || ui.rect_contains_pointer(rect)) {
+        let side = if view.small { 22.0 } else { 32.0 };
+        let first = Rect::from_min_size(Pos2::new(rect.right() - side * 2.0 - 14.0, rect.top() + 8.0), Vec2::splat(side));
+        let second = first.translate(Vec2::new(side + 4.0, 0.0));
+        for (area, glyph, tip, wanted) in [
+            (first, ph::ARROWS_OUT, "Розгорнути на все вікно · двічі клікни", TileAction::Expand),
+            (second, ph::CORNERS_OUT, "На весь екран · F11", TileAction::Fullscreen),
+        ] {
+            let button = ui.interact(area, egui::Id::new(("tile-action", view.salt.0, view.salt.1.index(), wanted as u8)), Sense::click());
+            let fill = if button.hovered() { Color32::from_black_alpha(215) } else { Color32::from_black_alpha(150) };
+            p.rect_filled(area, Rounding::same(8.0), fill);
+            p.text(area.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(side * 0.6), TEXT);
+            if button.clicked() { action = Some(wanted); }
+            button.on_hover_text(tip);
+        }
+    }
+    (response, action)
+}
+
+/// Zooms about a point of the view: the picture point under `pointer` stays under it.
+/// `base` is the picture size at 100%, `pointer` is relative to the view centre.
+/// Returns the new `(zoom, pan)`.
+fn zoom_at(base: Vec2, zoom: f32, pan: Vec2, pointer: Vec2, scroll: f32) -> (f32, Vec2) {
+    let new = (zoom * (scroll * 0.0025).exp()).clamp(1.0, 6.0);
+    let relative = (pointer - pan) / (base * zoom);
+    (new, pointer - relative * (base * new))
+}
+
+/// Keeps the picture covering the view: you can never drag it away.
+fn clamp_pan(pan: Vec2, base: Vec2, zoom: f32, view: Vec2) -> Vec2 {
+    if zoom <= 1.0 { return Vec2::ZERO; }
+    let limit = ((base * zoom - view) * 0.5).max(Vec2::ZERO);
+    Vec2::new(pan.x.clamp(-limit.x, limit.x), pan.y.clamp(-limit.y, limit.y))
 }
 
 /// Layout of a spotlight (one big tile) plus a strip of the others.
@@ -534,6 +577,29 @@ mod layout_tests {
     }
 
     #[test]
+    fn zoom_keeps_the_point_under_the_cursor_and_stays_in_bounds() {
+        let base = Vec2::new(1280.0, 720.0);
+        let view = Vec2::new(1400.0, 800.0);
+        let pointer = Vec2::new(300.0, -120.0);
+        let (zoom, pan) = zoom_at(base, 1.0, Vec2::ZERO, pointer, 300.0);
+        assert!(zoom > 1.0 && zoom <= 6.0);
+        // The picture point that was under the pointer is still under it.
+        let before = (pointer - Vec2::ZERO) / (base * 1.0);
+        let after = (pointer - pan) / (base * zoom);
+        assert!((before - after).length() < 1e-4, "{before:?} vs {after:?}");
+        let (zoom, _) = zoom_at(base, 5.9, Vec2::ZERO, Vec2::ZERO, 5000.0);
+        assert_eq!(zoom, 6.0, "zoom is capped");
+        let (zoom, _) = zoom_at(base, 1.0, Vec2::ZERO, Vec2::ZERO, -5000.0);
+        assert_eq!(zoom, 1.0, "cannot zoom out below the whole picture");
+        // Dragging far away is stopped at the picture's edge; at 100% there is no pan.
+        let clamped = clamp_pan(Vec2::new(9999.0, -9999.0), base, 3.0, view);
+        assert_eq!(clamped, Vec2::new((base.x * 3.0 - view.x) / 2.0, -(base.y * 3.0 - view.y) / 2.0));
+        assert_eq!(clamp_pan(Vec2::new(40.0, 40.0), base, 1.0, view), Vec2::ZERO);
+        // A picture that is smaller than the view in one direction cannot be moved in it.
+        assert_eq!(clamp_pan(Vec2::new(50.0, 0.0), Vec2::new(100.0, 700.0), 1.5, Vec2::new(1000.0, 600.0)).x, 0.0);
+    }
+
+    #[test]
     fn identity_colour_is_stable_per_name() {
         assert_eq!(name_color("Вадим"), name_color("Вадим"));
     }
@@ -548,6 +614,24 @@ mod layout_tests {
 // ── Screens ────────────────────────────────────────────────────────────────
 impl FriendsApp {
     pub(super) fn render(&mut self, ctx: &egui::Context) {
+        if let Some(key) = self.fullview {
+            // The stream is gone (friend stopped sharing): leave the full view after a moment.
+            if self.video_textures.contains_key(&key) {
+                self.fullview_missing_since = None;
+            } else {
+                let since = *self.fullview_missing_since.get_or_insert_with(Instant::now);
+                if since.elapsed() > Duration::from_millis(2500) {
+                    self.close_fullview(ctx);
+                    self.fullview_missing_since = None;
+                }
+            }
+            if self.fullview.is_some() {
+                egui::CentralPanel::default().frame(egui::Frame::none().fill(Color32::BLACK))
+                    .show(ctx, |ui| self.full_view(ui, key));
+                if self.share_picker_open { self.share_picker(ctx); }
+                return;
+            }
+        }
         let narrow = ctx.screen_rect().width() < 1100.0;
         if self.sidebar_open {
             egui::SidePanel::left("rail").resizable(false).exact_width(if narrow { 232.0 } else { 252.0 })
@@ -963,7 +1047,7 @@ impl FriendsApp {
         let spotlight = self.spotlight.filter(|k| tiles.iter().any(|t| t.key == *k)).or(automatic);
         let gap = 12.0;
         let mut clicked: Option<(u64, StreamKind)> = None;
-        let mut double_clicked = false;
+        let mut expand: Option<((u64, StreamKind), bool)> = None;
 
         if let Some(big) = spotlight {
             let others: Vec<&Tile> = tiles.iter().filter(|t| t.key != big).collect();
@@ -971,15 +1055,23 @@ impl FriendsApp {
             if let Some(tile) = tiles.iter().find(|t| t.key == big) {
                 let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
                     badge: tile.badge, contain: tile.contain, small: false, salt: tile.key };
-                let response = paint_tile(ui, main, &view, self.video_textures.get(&tile.key));
-                if response.double_clicked() { double_clicked = true; }
-                response.on_hover_text("Двічі клікни, щоб розгорнути на весь екран");
+                let (response, action) = paint_tile(ui, main, &view, self.video_textures.get(&tile.key));
+                if response.double_clicked() { expand = Some((tile.key, false)); }
+                match action {
+                    Some(TileAction::Expand) => expand = Some((tile.key, false)),
+                    Some(TileAction::Fullscreen) => expand = Some((tile.key, true)),
+                    None => {}
+                }
             }
             for (tile, rect) in others.iter().zip(strip) {
                 let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
                     badge: tile.badge, contain: tile.contain, small: true, salt: tile.key };
-                if paint_tile(ui, rect, &view, self.video_textures.get(&tile.key)).clicked() {
-                    clicked = Some(tile.key);
+                let (response, action) = paint_tile(ui, rect, &view, self.video_textures.get(&tile.key));
+                if response.clicked() && action.is_none() { clicked = Some(tile.key); }
+                match action {
+                    Some(TileAction::Expand) => expand = Some((tile.key, false)),
+                    Some(TileAction::Fullscreen) => expand = Some((tile.key, true)),
+                    None => {}
                 }
             }
         } else {
@@ -1000,8 +1092,14 @@ impl FriendsApp {
                     Vec2::new(tile_w, tile_h));
                 let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
                     badge: tile.badge, contain: tile.contain, small: false, salt: tile.key };
-                let response = paint_tile(ui, rect, &view, self.video_textures.get(&tile.key));
-                if response.clicked() && tiles.len() > 1 { clicked = Some(tile.key); }
+                let (response, action) = paint_tile(ui, rect, &view, self.video_textures.get(&tile.key));
+                if response.double_clicked() && self.video_textures.contains_key(&tile.key) { expand = Some((tile.key, false)); }
+                else if response.clicked() && action.is_none() && tiles.len() > 1 { clicked = Some(tile.key); }
+                match action {
+                    Some(TileAction::Expand) => expand = Some((tile.key, false)),
+                    Some(TileAction::Fullscreen) => expand = Some((tile.key, true)),
+                    None => {}
+                }
                 if tiles.len() > 1 { response.on_hover_text("Клікни, щоб збільшити"); }
             }
             if alone {
@@ -1012,10 +1110,120 @@ impl FriendsApp {
             }
         }
         if let Some(key) = clicked { self.spotlight = Some(key); }
-        if double_clicked {
-            self.focus_mode = !self.focus_mode;
-            if !self.focus_mode { self.chat_unread = 0; }
+        if let Some((key, fullscreen)) = expand {
+            self.open_fullview(key);
+            if fullscreen { ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)); }
         }
+    }
+
+    /// One stream on the whole window, with zoom for reading small text and controls that hide when idle.
+    fn full_view(&mut self, ui: &mut Ui, key: (u64, StreamKind)) {
+        let ctx = ui.ctx().clone();
+        let rect = ui.max_rect();
+        let local_id = self.mesh.as_ref().map(|m| m.id).unwrap_or(0);
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+
+        let active = ctx.input(|i| i.pointer.delta().length() > 0.0 || i.pointer.any_down() || i.smooth_scroll_delta.length() > 0.0);
+        if active { self.last_pointer_move = Instant::now(); }
+        let idle = self.last_pointer_move.elapsed() > Duration::from_millis(2600) && !self.share_picker_open;
+        let controls = ctx.animate_bool_with_time(egui::Id::new("fullview-controls"), !idle, 0.18);
+        ctx.request_repaint_after(Duration::from_millis(60));
+        if idle { ctx.set_cursor_icon(egui::CursorIcon::None); }
+
+        let surface = ui.interact(rect, egui::Id::new("fullview-surface"), Sense::click_and_drag());
+        let texture = self.video_textures.get(&key).cloned();
+
+        // The picture: always whole (never cropped), zoom with the wheel, move by dragging.
+        if let Some(texture) = &texture {
+            let [tw, th] = texture.size();
+            let aspect = tw as f32 / th.max(1) as f32;
+            let base = if rect.width() / rect.height() > aspect {
+                Vec2::new(rect.height() * aspect, rect.height())
+            } else {
+                Vec2::new(rect.width(), rect.width() / aspect)
+            };
+            let centre = rect.center();
+            if surface.hovered() {
+                let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    let pointer = ctx.input(|i| i.pointer.hover_pos()).unwrap_or(centre) - centre;
+                    (self.fullview_zoom, self.fullview_pan) =
+                        zoom_at(base, self.fullview_zoom, self.fullview_pan, pointer, scroll);
+                }
+            }
+            if surface.dragged() && self.fullview_zoom > 1.0 { self.fullview_pan += surface.drag_delta(); }
+            let size = base * self.fullview_zoom;
+            self.fullview_pan = clamp_pan(self.fullview_pan, base, self.fullview_zoom, rect.size());
+            let shown = Rect::from_center_size(centre + self.fullview_pan, size);
+            let mut shape = egui::epaint::RectShape::filled(shown, Rounding::ZERO, Color32::WHITE);
+            shape.fill_texture_id = texture.id();
+            shape.uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            ui.painter_at(rect).add(shape);
+            if surface.hovered() && self.fullview_zoom > 1.0 {
+                ctx.set_cursor_icon(if surface.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
+        } else {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Трансляція завершилась",
+                FontId::proportional(18.0), TEXT2);
+        }
+        if surface.double_clicked() { self.close_fullview(&ctx); return; }
+        if ctx.input(|i| i.key_pressed(egui::Key::Num0)) { self.fullview_zoom = 1.0; self.fullview_pan = Vec2::ZERO; }
+
+        // Who is talking, so nobody is missed while a screen fills the monitor.
+        let talkers: Vec<String> = self.peers.iter()
+            .filter(|p| self.voice.as_ref().is_some_and(|v| v.is_speaking(p.id)))
+            .map(|p| p.name.clone()).collect();
+        if !talkers.is_empty() {
+            let label = format!("{} {}", ph::SPEAKER_HIGH, talkers.join(", "));
+            let galley = truncated(ui, &label, FontId::proportional(14.0), TEXT, rect.width() * 0.6);
+            let size = galley.size() + Vec2::new(24.0, 14.0);
+            let pill = Rect::from_min_size(Pos2::new(rect.left() + 16.0, rect.bottom() - 108.0 - size.y), size);
+            ui.painter().rect_filled(pill, Rounding::same(10.0), Color32::from_black_alpha(170));
+            ui.painter().rect_stroke(pill, Rounding::same(10.0), Stroke::new(1.5_f32, GREEN));
+            ui.painter().galley(pill.min + Vec2::new(12.0, 7.0), galley, TEXT);
+        }
+
+        if controls <= 0.01 { return; }
+        let fade = |alpha: f32| Color32::from_black_alpha((alpha * controls) as u8);
+
+        // Top strip: what this is, and the way out.
+        let top = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 64.0));
+        ui.painter().rect_filled(top, Rounding::ZERO, fade(150.0));
+        let who = if key.0 == local_id { self.settings.nickname.clone() }
+            else { self.peers.iter().find(|p| p.id == key.0).map(|p| p.name.clone()).unwrap_or_default() };
+        let what = match (key.1, key.0 == local_id) {
+            (StreamKind::Screen, true) => "твій показ екрана",
+            (StreamKind::Screen, false) => "показує екран",
+            (StreamKind::Camera, true) => "твоя камера",
+            (StreamKind::Camera, false) => "камера",
+        };
+        let size_text = texture.as_ref().map(|t| format!("{}×{}", t.size()[0], t.size()[1])).unwrap_or_default();
+        let zoom_text = if self.fullview_zoom > 1.01 { format!("  ·  {:.0}%", self.fullview_zoom * 100.0) } else { String::new() };
+        ui.painter().text(Pos2::new(rect.left() + 20.0, rect.top() + 22.0), Align2::LEFT_CENTER,
+            format!("{who}  ·  {what}"), semibold(17.0), Color32::from_white_alpha((255.0 * controls) as u8));
+        ui.painter().text(Pos2::new(rect.left() + 20.0, rect.top() + 44.0), Align2::LEFT_CENTER,
+            format!("{size_text}{zoom_text}  ·  колесо миші: збільшити, 0: скинути"), FontId::proportional(12.0),
+            Color32::from_white_alpha((170.0 * controls) as u8));
+        let mut leave_view = false;
+        let mut toggle_fullscreen = false;
+        let buttons = Rect::from_min_size(Pos2::new(rect.right() - 108.0, rect.top() + 14.0), Vec2::new(96.0, 38.0));
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if icon_button(ui, ph::ARROWS_IN, "Повернутися до звичайного вигляду · Esc", false, 38.0) { leave_view = true; }
+            if icon_button(ui, if fullscreen { ph::CORNERS_IN } else { ph::CORNERS_OUT },
+                if fullscreen { "Вийти з повного екрана · Esc" } else { "На весь екран · F11" }, fullscreen, 38.0) {
+                toggle_fullscreen = true;
+            }
+        });
+
+        // Bottom: the same call controls as everywhere else.
+        if self.voice.is_some() || self.screen.is_some() {
+            let bottom = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - 92.0), rect.max);
+            ui.painter().rect_filled(bottom, Rounding::ZERO, fade(150.0));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bottom), |ui| self.call_bar(ui));
+        }
+        if leave_view { self.close_fullview(&ctx); }
+        if toggle_fullscreen { ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen)); }
     }
 
     /// Strip under the top bar while you are sharing your screen.
@@ -1179,7 +1387,7 @@ impl FriendsApp {
         let deaf = self.deafened.load(Ordering::Relaxed);
         let camera = self.video.as_ref().is_some_and(|v| v.enabled());
         let camera_starting = self.video.as_ref().is_some_and(|v| v.starting());
-        let chat_button = self.focus_mode;
+        let chat_button = self.focus_mode || self.fullview.is_some();
         // Shrink the controls instead of clipping them in narrow windows.
         let room = ui.available_width() - 24.0;
         let d = if room >= 470.0 { 48.0 } else { 40.0 };
@@ -1234,6 +1442,10 @@ impl FriendsApp {
                     if unread > 0 { ACCENT_INK } else { TEXT }, true, d) {
                     self.focus_mode = false;
                     self.chat_unread = 0;
+                    self.fullview = None;
+                    if ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                    }
                 }
             }
         });
@@ -1634,7 +1846,7 @@ impl FriendsApp {
         let nickname = self.settings.nickname.clone();
         let view = TileView { name: &nickname, note, speaking: false, badge: None, contain: false, small: false,
             salt: (local_id.unwrap_or(0), StreamKind::Camera) };
-        paint_tile(ui, rect, &view, texture);
+        let _ = paint_tile(ui, rect, &view, texture);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if on {

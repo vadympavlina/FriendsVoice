@@ -221,6 +221,12 @@ pub struct FriendsApp {
     share_rate: (Instant, u64, f32),
     /// Tile the user pinned as the big one.
     spotlight: Option<(u64, StreamKind)>,
+    /// Tile shown on the whole window ("full view"), optionally on the whole monitor.
+    fullview: Option<(u64, StreamKind)>,
+    fullview_zoom: f32,
+    fullview_pan: egui::Vec2,
+    fullview_missing_since: Option<Instant>,
+    last_pointer_move: Instant,
     sounds: SoundPlayer,
     /// States seen on the previous frame, to play a sound exactly when one changes.
     prev_mic: bool,
@@ -309,6 +315,11 @@ impl Default for FriendsApp {
             },
             share_rate: (Instant::now(), 0, 0.0),
             spotlight: None,
+            fullview: None,
+            fullview_zoom: 1.0,
+            fullview_pan: egui::Vec2::ZERO,
+            fullview_missing_since: None,
+            last_pointer_move: Instant::now(),
             sounds: SoundPlayer::new(&saved_output_device, saved_sounds_enabled, saved_sounds_volume),
             prev_mic: true,
             prev_deaf: false,
@@ -371,7 +382,7 @@ impl FriendsApp {
                 }
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
-                    if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
+                    if self.focus_mode || self.fullview.is_some() {self.chat_unread=self.chat_unread.saturating_add(1);}
                     self.messages.push(ChatEntry { time: clock_now(), name, text, system: false, repeat: 1 });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
@@ -430,6 +441,7 @@ impl FriendsApp {
     fn toggle_voice(&mut self) {
         if self.voice.is_some() {
             self.stop_screen_share(None);
+            self.fullview = None;
             self.sounds.play(Sound::LeaveSelf);
             self.video.take();
             self.video_textures.clear();
@@ -609,6 +621,22 @@ impl FriendsApp {
         self.prev_sharing = sharing;
     }
 
+    /// Shows one stream on the whole window.
+    fn open_fullview(&mut self, key: (u64, StreamKind)) {
+        self.fullview = Some(key);
+        self.fullview_zoom = 1.0;
+        self.fullview_pan = egui::Vec2::ZERO;
+        self.fullview_missing_since = None;
+        self.last_pointer_move = Instant::now();
+    }
+
+    fn close_fullview(&mut self, ctx: &egui::Context) {
+        self.fullview = None;
+        if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
+    }
+
     fn start_ptt_capture(&mut self) {
         self.ptt_capture = Some(voice::pressed_keys().into_iter().collect());
     }
@@ -769,8 +797,17 @@ impl eframe::App for FriendsApp {
             self.focus_mode = false;
             self.chat_unread = 0;
         }
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+        }
         if shortcuts.4 && self.ptt_capture.is_none() {
-            if self.share_picker_open {
+            if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+                // First Esc leaves full screen, the next one leaves the full view.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else if self.fullview.is_some() {
+                self.fullview = None;
+            } else if self.share_picker_open {
                 self.share_picker_open = false;
             } else if self.chat_search_open {
                 self.chat_search_open = false;

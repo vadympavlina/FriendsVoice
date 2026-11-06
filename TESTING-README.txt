@@ -52,6 +52,14 @@ SCREEN SHARING (Windows 10 1903+ / Windows 11)
  6. Stop sharing from the banner or the call bar. A friend who joins later must
     see the picture within a second or two.
 
+EXPAND / FULL SCREEN
+ 1. Hover a camera or screen tile: two buttons appear (fill the window / fill
+    the monitor). Double-click a tile also fills the window.
+ 2. F11 toggles full screen; Esc leaves full screen first, then the expanded view.
+ 3. In the expanded view: mouse wheel zooms (up to 600%), drag moves, key 0
+    resets. Controls fade after ~2.5 s without mouse movement.
+ 4. If the friend stops sharing, the expanded view closes by itself.
+
 SOUNDS
  Mic/sound/camera/screen on-off tones, your own join/leave chime, and a
  distinct bell when a friend joins or leaves. Settings > Sound has a test
