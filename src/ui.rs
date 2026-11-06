@@ -1213,7 +1213,7 @@ impl FriendsApp {
             };
             let needed_height=rows as f32*row_height+rows.saturating_sub(1) as f32*gap;
             let max_gallery_height=if self.focus_mode {
-                (ui.available_height()-120.0).clamp(185.0,670.0)
+                (ui.available_height()-215.0).clamp(145.0,590.0)
             } else {
                 ((ui.available_height()-310.0)*0.8).clamp(135.0,340.0)
             };
@@ -1263,7 +1263,7 @@ impl FriendsApp {
                     }
                 });
 
-            if self.peers.is_empty() && !self.focus_mode {
+            if self.peers.is_empty() && !self.focus_mode && ui.available_height()>285.0 {
                 ui.add_space(8.0);
                 egui::Frame::none()
                     .fill(Color32::from_rgb(33,43,69))
@@ -1336,6 +1336,7 @@ impl FriendsApp {
                                 if icon_button(ui,"Пошук у чаті · Ctrl+F",Glyph::Search,
                                     true,self.chat_search_open,false,30.0) {
                                     self.chat_search_open=!self.chat_search_open;
+                                    self.chat_search_focus=self.chat_search_open;
                                     if !self.chat_search_open {self.chat_search.clear();}
                                 }
                                 ui.label(text_caption(format!("{} онлайн",self.peers.len()+1)));
@@ -1345,13 +1346,18 @@ impl FriendsApp {
                             ui.add_space(6.0);
                             ui.horizontal(|ui|{
                                 let width=(ui.available_width()-39.0).max(80.0);
-                                ui.add(egui::TextEdit::singleline(&mut self.chat_search)
+                                let search_field=ui.add(egui::TextEdit::singleline(&mut self.chat_search)
                                     .hint_text("Пошук за текстом або іменем…")
                                     .desired_width(width));
+                                if self.chat_search_focus {
+                                    search_field.request_focus();
+                                    self.chat_search_focus=false;
+                                }
                                 if icon_button(ui,"Очистити пошук",Glyph::Close,
                                     true,false,false,30.0) {
                                     self.chat_search.clear();
                                     self.chat_search_open=false;
+                                    self.chat_search_focus=false;
                                 }
                             });
                         }
@@ -1398,7 +1404,8 @@ impl FriendsApp {
                                     .hint_text("Напиши повідомлення друзям…")
                                     .desired_width(width)
                                     .margin(egui::Margin::symmetric(10.0,8.0)));
-                            if response.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)){
+                            if (response.has_focus() || response.lost_focus())
+                                && ui.input(|i|i.key_pressed(egui::Key::Enter)) {
                                 self.send_chat();
                             }
                             if icon_button(ui,"Надіслати повідомлення",Glyph::Send,
