@@ -4,6 +4,7 @@ mod protocol;
 mod voice;
 mod video;
 mod stream;
+mod screen;
 mod ui;
 mod branding;
 
@@ -20,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use voice::VoiceSession;
+use screen::{ScreenShare, ShareQuality, ShareSource};
 use stream::StreamKind;
 use video::{VideoSession, VideoEvent};
 
@@ -40,6 +42,9 @@ struct Settings {
     video_quality: u32,
     noise_gate: bool,
     gate_threshold: f32,
+    /// Last used screen-share quality.
+    share_height: usize,
+    share_fps: u32,
 }
 
 impl Default for Settings {
@@ -56,6 +61,8 @@ impl Default for Settings {
             video_quality: 4,
             noise_gate: false, // Opt-in: never silently clip quiet microphones.
             gate_threshold: 0.018,
+            share_height: 1080,
+            share_fps: 30,
         }
     }
 }
@@ -196,6 +203,16 @@ pub struct FriendsApp {
     /// While `Some`, the next key press becomes the Push-to-Talk key. Holds keys that were already down.
     ptt_capture: Option<HashSet<i32>>,
     camera_stall_reported: bool,
+    screen: Option<ScreenShare>,
+    share_picker_open: bool,
+    share_sources: Vec<ShareSource>,
+    share_tab: usize,
+    share_selected: Option<usize>,
+    share_quality: ShareQuality,
+    /// (when sampled, bytes at that time, megabits per second)
+    share_rate: (Instant, u64, f32),
+    /// Tile the user pinned as the big one.
+    spotlight: Option<(u64, StreamKind)>,
     ip_copied_at: Option<Instant>,
     /// Cameras reported by Windows as `(index, name)`; filled by a background thread.
     cameras: Arc<Mutex<Vec<(u32, String)>>>,
@@ -210,6 +227,8 @@ impl Default for FriendsApp {
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
         let saved_video_quality = settings.video_quality.min(5);
         let saved_noise_gate = settings.noise_gate;
+        let saved_share_height = settings.share_height;
+        let saved_share_fps = settings.share_fps;
         let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
         let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
@@ -258,6 +277,17 @@ impl Default for FriendsApp {
             add_friend_open: false,
             ptt_capture: None,
             camera_stall_reported: false,
+            screen: None,
+            share_picker_open: false,
+            share_sources: Vec::new(),
+            share_tab: 0,
+            share_selected: None,
+            share_quality: ShareQuality {
+                max_height: if screen::RESOLUTIONS.iter().any(|(h, _)| *h == saved_share_height) { saved_share_height } else { 1080 },
+                fps: if screen::FRAME_RATES.contains(&saved_share_fps) { saved_share_fps } else { 30 },
+            },
+            share_rate: (Instant::now(), 0, 0.0),
+            spotlight: None,
             ip_copied_at: None,
             cameras: Arc::new(Mutex::new(Vec::new())),
             cameras_loading: Arc::new(AtomicBool::new(false)),
@@ -353,6 +383,7 @@ impl FriendsApp {
 
     fn toggle_voice(&mut self) {
         if self.voice.is_some() {
+            self.stop_screen_share(None);
             self.video.take();
             self.video_textures.clear();
             self.video_seen.clear();
@@ -440,6 +471,63 @@ impl FriendsApp {
             video.enable();
             self.notice(if in_call { "Запуск камери. Windows може попросити дозвіл." }
                 else { "Запуск камери для перегляду. Друзі її не бачать." });
+        }
+    }
+
+    /// Opens the "what do you want to show" window with a fresh list of screens and windows.
+    fn open_share_picker(&mut self) {
+        if self.voice.is_none() {
+            self.notice("Щоб показати екран, спершу зайди в голосовий канал.");
+            return;
+        }
+        self.share_sources = screen::list_sources();
+        self.share_tab = 0;
+        self.share_selected = self.share_sources.iter().position(|s| !s.is_window());
+        self.share_picker_open = true;
+    }
+
+    fn start_screen_share(&mut self) {
+        let Some(source) = self.share_selected.and_then(|i| self.share_sources.get(i)).cloned() else { return; };
+        if !self.ensure_video() { return; }
+        let Some(video) = self.video.as_ref() else { return; };
+        let (hub, events, local_id) = (video.hub(), video.events_sender(), video.local_id());
+        self.settings.share_height = self.share_quality.max_height;
+        self.settings.share_fps = self.share_quality.fps;
+        save_settings(&self.settings);
+        match ScreenShare::start(&source, self.share_quality, hub, events, local_id) {
+            Ok(share) => {
+                self.screen = Some(share);
+                self.share_picker_open = false;
+                self.share_rate = (Instant::now(), 0, 0.0);
+                self.notice(format!("Ти показуєш друзям: {}.", source.title));
+            }
+            Err(error) => self.notice(error),
+        }
+    }
+
+    fn stop_screen_share(&mut self, reason: Option<String>) {
+        if self.screen.take().is_none() { return; }
+        if let Some(mesh) = &self.mesh {
+            self.video_textures.remove(&(mesh.id, StreamKind::Screen));
+            self.video_seen.remove(&(mesh.id, StreamKind::Screen));
+        }
+        self.notice(reason.unwrap_or_else(|| "Показ екрана зупинено.".into()));
+    }
+
+    /// Notices a share that ended by itself and refreshes the bit-rate readout.
+    fn watch_screen_share(&mut self) {
+        let Some(share) = self.screen.as_ref() else { return; };
+        if !share.is_running() {
+            let reason = share.end_reason().unwrap_or_else(|| "Показ екрана зупинено.".into());
+            self.stop_screen_share(Some(reason));
+            return;
+        }
+        let bytes = share.stats.bytes.load(Ordering::Relaxed);
+        let (since, before, _) = self.share_rate;
+        let seconds = since.elapsed().as_secs_f32();
+        if seconds >= 1.0 {
+            let mbps = (bytes.saturating_sub(before)) as f32 * 8.0 / seconds / 1_000_000.0;
+            self.share_rate = (Instant::now(), bytes, mbps);
         }
     }
 
@@ -575,6 +663,7 @@ impl eframe::App for FriendsApp {
         self.stop_orphan_preview();
         self.poll_ptt_capture();
         self.warn_if_camera_stalled();
+        self.watch_screen_share();
         self.poll_video(ctx);
         let shortcuts = ctx.input(|i| {
             let ctrl = i.modifiers.ctrl && !i.modifiers.alt;
@@ -602,7 +691,9 @@ impl eframe::App for FriendsApp {
             self.chat_unread = 0;
         }
         if shortcuts.4 && self.ptt_capture.is_none() {
-            if self.chat_search_open {
+            if self.share_picker_open {
+                self.share_picker_open = false;
+            } else if self.chat_search_open {
                 self.chat_search_open = false;
                 self.chat_search_focus = false;
                 self.chat_search.clear();
@@ -617,6 +708,8 @@ impl eframe::App for FriendsApp {
         // No network worker depends on the UI frame rate.
         let repaint_ms = if self.ptt_capture.is_some() {
             25
+        } else if self.screen.is_some() || self.video_textures.keys().any(|k| k.1 == StreamKind::Screen) {
+            33
         } else if self.video.as_ref().is_some_and(|v| v.enabled()) {
             60
         } else if self.voice.is_some() {

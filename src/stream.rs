@@ -20,7 +20,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Receiver, SyncSender},
+        mpsc::{self, SyncSender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -37,7 +37,7 @@ impl StreamKind {
     fn from_code(code: u8) -> Option<Self> {
         match code { 0 => Some(Self::Camera), 1 => Some(Self::Screen), _ => None }
     }
-    fn index(self) -> usize { self.code() as usize }
+    pub fn index(self) -> usize { self.code() as usize }
 }
 
 // ── Colour conversion ──────────────────────────────────────────────────────
@@ -407,12 +407,10 @@ struct Slot {
 pub struct CompleteFrame {
     pub sender: u64,
     pub kind: StreamKind,
-    pub key: bool,
     pub data: Vec<u8>,
 }
 pub struct KeyRequest {
     pub addr: IpAddr,
-    pub sender: u64,
     pub kind: StreamKind,
     pub session: u64,
 }
@@ -461,7 +459,7 @@ impl Reassembler {
             slot.need_key = true;
         }
         if slot.need_key { return None; }
-        Some(CompleteFrame { sender: header.sender, kind: header.kind, key, data })
+        Some(CompleteFrame { sender: header.sender, kind: header.kind, data })
     }
 
     /// A decoder rejected a frame: ask for a key frame.
@@ -483,11 +481,11 @@ impl Reassembler {
     /// Streams that need a key frame, at most one request per stream every 600 ms.
     pub fn key_requests(&mut self, now: Instant) -> Vec<KeyRequest> {
         let mut requests = Vec::new();
-        for ((sender, kind), slot) in self.slots.iter_mut() {
+        for ((_, kind), slot) in self.slots.iter_mut() {
             let due = slot.last_request.is_none_or(|t| now.duration_since(t) > Duration::from_millis(600));
             if slot.need_key && due {
                 slot.last_request = Some(now);
-                requests.push(KeyRequest { addr: slot.addr, sender: *sender, kind: *kind, session: slot.session });
+                requests.push(KeyRequest { addr: slot.addr, kind: *kind, session: slot.session });
             }
         }
         requests
@@ -628,8 +626,6 @@ impl StreamHub {
         })
     }
 
-    pub fn local_id(&self) -> u64 { self.local_id }
-
     /// Number of friends currently in the call (the people who receive the stream).
     pub fn viewers(&self) -> usize { self.targets.lock().map(|t| t.len()).unwrap_or(0) }
 
@@ -662,10 +658,6 @@ impl Drop for StreamHub {
         for worker in self.workers.drain(..) { let _ = worker.join(); }
     }
 }
-
-// Silence "never read" for the receiver type alias used only in tests.
-#[allow(dead_code)]
-type _Unused = Receiver<()>;
 
 #[cfg(test)]
 mod tests {
@@ -787,7 +779,7 @@ mod tests {
         assert!(feed(&mut reassembler, &make_packets(StreamKind::Screen, 1, 5, 2, false, &delta).unwrap(), &[]).is_none());
         let requests = reassembler.key_requests(Instant::now());
         assert_eq!(requests.len(), 1);
-        assert_eq!((requests[0].sender, requests[0].kind, requests[0].session), (1, StreamKind::Screen, 5));
+        assert_eq!((requests[0].kind, requests[0].session), (StreamKind::Screen, 5));
         assert!(reassembler.key_requests(Instant::now()).is_empty(), "requests are rate limited");
         // More deltas are still refused, then a key frame restores playback.
         assert!(feed(&mut reassembler, &make_packets(StreamKind::Screen, 1, 5, 3, false, &delta).unwrap(), &[]).is_none());

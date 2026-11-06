@@ -9,6 +9,7 @@ use eframe::egui::{
     self, text::LayoutJob, Align2, FontFamily, FontId, Margin, Pos2, Rect, Response, RichText,
     Rounding, Sense, Stroke, Ui, Vec2,
 };
+use crate::screen;
 use egui_phosphor::regular as ph;
 use std::sync::Arc;
 
@@ -307,6 +308,23 @@ fn section_label(ui: &mut Ui, label: &str, trailing: Option<String>) {
     ui.add_space(3.0);
 }
 
+/// A row of mutually exclusive choices. Returns the index clicked, if any.
+fn segmented(ui: &mut Ui, labels: &[String], selected: usize) -> Option<usize> {
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (index, label) in labels.iter().enumerate() {
+            let on = index == selected;
+            let button = egui::Button::new(if on { strong(label.as_str(), 13.0, ACCENT_INK) } else { text(label.as_str(), 13.0, TEXT) })
+                .fill(if on { ACCENT } else { RAISED })
+                .rounding(Rounding::same(8.0))
+                .min_size(Vec2::new(0.0, 32.0));
+            if ui.add(button).clicked() { clicked = Some(index); }
+        }
+    });
+    clicked
+}
+
 fn level_bar(ui: &mut Ui, level: f32, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 8.0), Sense::hover());
     ui.painter().rect_filled(rect, Rounding::same(4.0), RAISED);
@@ -348,53 +366,113 @@ fn best_grid(count: usize, w: f32, h: f32, gap: f32) -> (usize, f32, f32) {
     (best.0, width, width / TILE_ASPECT)
 }
 
-fn paint_tile(
-    ui: &mut Ui, rect: Rect, name: &str, note: Option<&str>,
-    speaking: bool, video: Option<&egui::TextureHandle>, badge: Option<&str>,
-) {
+/// What a tile shows.
+struct TileView<'a> {
+    name: &'a str,
+    note: Option<&'a str>,
+    speaking: bool,
+    badge: Option<&'a str>,
+    /// Fit the whole picture inside the tile (screens) instead of filling it (cameras).
+    contain: bool,
+    /// Small strip tile: smaller text, no avatar glow.
+    small: bool,
+    salt: (u64, StreamKind),
+}
+
+fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Option<&egui::TextureHandle>) -> Response {
+    let response = ui.interact(rect, egui::Id::new(("tile", view.salt.0, view.salt.1.index())), Sense::click());
     let p = ui.painter_at(rect);
-    let rounding = Rounding::same(12.0);
+    let rounding = Rounding::same(if view.small { 8.0 } else { 12.0 });
     p.rect_filled(rect, rounding, TILE);
     if let Some(frame) = video {
-        // Cover-fit the 16:9 camera frame instead of stretching it.
-        let aspect = (rect.width() / rect.height()).max(0.01);
-        let uv = if aspect < TILE_ASPECT {
-            let visible = (aspect / TILE_ASPECT).clamp(0.01, 1.0);
-            Rect::from_min_max(Pos2::new((1.0 - visible) * 0.5, 0.0), Pos2::new((1.0 + visible) * 0.5, 1.0))
+        let [texture_w, texture_h] = frame.size();
+        let picture_aspect = texture_w as f32 / texture_h.max(1) as f32;
+        if view.contain {
+            // Screens are never cropped: the whole picture is shown, centred.
+            let (w, h) = if rect.width() / rect.height() > picture_aspect {
+                (rect.height() * picture_aspect, rect.height())
+            } else {
+                (rect.width(), rect.width() / picture_aspect)
+            };
+            let fitted = Rect::from_center_size(rect.center(), Vec2::new(w, h));
+            let mut shape = egui::epaint::RectShape::filled(fitted, Rounding::same(4.0), Color32::WHITE);
+            shape.fill_texture_id = frame.id();
+            shape.uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            p.add(shape);
         } else {
-            let visible = (TILE_ASPECT / aspect).clamp(0.01, 1.0);
-            Rect::from_min_max(Pos2::new(0.0, (1.0 - visible) * 0.5), Pos2::new(1.0, (1.0 + visible) * 0.5))
-        };
-        let mut shape = egui::epaint::RectShape::filled(rect, rounding, Color32::WHITE);
-        shape.fill_texture_id = frame.id();
-        shape.uv = uv;
-        p.add(shape);
+            // Cameras fill the tile: crop the picture's edges instead of stretching it.
+            let aspect = (rect.width() / rect.height()).max(0.01);
+            let uv = if aspect < picture_aspect {
+                let visible = (aspect / picture_aspect).clamp(0.01, 1.0);
+                Rect::from_min_max(Pos2::new((1.0 - visible) * 0.5, 0.0), Pos2::new((1.0 + visible) * 0.5, 1.0))
+            } else {
+                let visible = (picture_aspect / aspect).clamp(0.01, 1.0);
+                Rect::from_min_max(Pos2::new(0.0, (1.0 - visible) * 0.5), Pos2::new(1.0, (1.0 + visible) * 0.5))
+            };
+            let mut shape = egui::epaint::RectShape::filled(rect, rounding, Color32::WHITE);
+            shape.fill_texture_id = frame.id();
+            shape.uv = uv;
+            p.add(shape);
+        }
     } else {
-        let diameter = (rect.height() * 0.36).clamp(30.0, 120.0);
-        paint_avatar(&p, rect.center() - Vec2::new(0.0, 6.0), diameter, name);
+        let diameter = (rect.height() * 0.36).clamp(24.0, 120.0);
+        paint_avatar(&p, rect.center() - Vec2::new(0.0, if view.small { 0.0 } else { 6.0 }), diameter, view.name);
     }
 
     // Name label.
-    let label = match note {
-        Some(note) => format!("{name}  ·  {note}"),
-        None => name.to_string(),
+    let label = match view.note {
+        Some(note) => format!("{}  ·  {note}", view.name),
+        None => view.name.to_string(),
     };
-    let galley = truncated(ui, &label, FontId::proportional(13.0), TEXT, rect.width() - 36.0);
-    let size = galley.size() + Vec2::new(16.0, 8.0);
+    let font = FontId::proportional(if view.small { 11.5 } else { 13.0 });
+    let galley = truncated(ui, &label, font, TEXT, rect.width() - 28.0);
+    let size = galley.size() + Vec2::new(14.0, 6.0);
     let pill = Rect::from_min_size(
-        Pos2::new(rect.left() + 10.0, rect.bottom() - 10.0 - size.y), size);
+        Pos2::new(rect.left() + 8.0, rect.bottom() - 8.0 - size.y), size);
     p.rect_filled(pill, Rounding::same(6.0), Color32::from_black_alpha(165));
-    p.galley(pill.min + Vec2::new(8.0, 4.0), galley, TEXT);
+    p.galley(pill.min + Vec2::new(7.0, 3.0), galley, TEXT);
 
-    if let Some(glyph) = badge {
+    if let Some(glyph) = view.badge {
         let center = Pos2::new(rect.right() - 22.0, rect.top() + 22.0);
         p.circle_filled(center, 14.0, RED);
         p.text(center, Align2::CENTER_CENTER, glyph, FontId::proportional(16.0), Color32::WHITE);
     }
     let glow = ui.ctx().animate_bool_with_time(
-        egui::Id::new(("tile-ring", name)), speaking, 0.12);
+        egui::Id::new(("tile-ring", view.salt.0, view.salt.1.index())), view.speaking, 0.12);
     if glow > 0.01 {
         p.rect_stroke(rect.shrink(1.25), rounding, Stroke::new(2.5_f32, GREEN.linear_multiply(glow)));
+    } else if response.hovered() && view.small {
+        p.rect_stroke(rect.shrink(1.0), rounding, Stroke::new(1.5_f32, ACCENT));
+    }
+    if response.hovered() && view.small {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// Layout of a spotlight (one big tile) plus a strip of the others.
+/// Returns `(big tile area, strip tile rects)`.
+fn spotlight_layout(area: Rect, others: usize, gap: f32) -> (Rect, Vec<Rect>) {
+    if others == 0 { return (area, Vec::new()); }
+    let n = others as f32;
+    if area.width() >= 820.0 {
+        let strip_w = (area.width() * 0.2).clamp(190.0, 260.0);
+        let main = Rect::from_min_max(area.min, Pos2::new(area.max.x - strip_w - gap, area.max.y));
+        let tile_h = (strip_w / TILE_ASPECT).min((area.height() - gap * (n - 1.0)) / n).max(48.0);
+        let rects = (0..others).map(|i| Rect::from_min_size(
+            Pos2::new(area.max.x - strip_w, area.min.y + i as f32 * (tile_h + gap)),
+            Vec2::new(strip_w, tile_h))).collect();
+        (main, rects)
+    } else {
+        let strip_h = (area.height() * 0.22).clamp(64.0, 110.0);
+        let main = Rect::from_min_max(area.min, Pos2::new(area.max.x, area.max.y - strip_h - gap));
+        let tile_w = (strip_h * TILE_ASPECT).min((area.width() - gap * (n - 1.0)) / n).max(40.0);
+        let total = tile_w * n + gap * (n - 1.0);
+        let left = area.center().x - total * 0.5;
+        let rects = (0..others).map(|i| Rect::from_min_size(
+            Pos2::new(left.max(area.min.x) + i as f32 * (tile_w + gap), area.max.y - strip_h),
+            Vec2::new(tile_w, strip_h))).collect();
+        (main, rects)
     }
 }
 
@@ -437,6 +515,25 @@ mod layout_tests {
     }
 
     #[test]
+    fn spotlight_layout_keeps_everything_inside_and_apart() {
+        for (w, h) in [(1100.0_f32, 620.0_f32), (700.0, 420.0), (900.0, 500.0), (400.0, 300.0)] {
+            let area = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(w, h));
+            for others in 0..=6 {
+                let (main, strip) = spotlight_layout(area, others, 10.0);
+                assert_eq!(strip.len(), others);
+                assert!(main.width() > 100.0 && main.height() > 60.0, "{w}x{h} n={others}: main {main:?}");
+                for rect in &strip {
+                    assert!(area.expand(0.5).contains_rect(*rect), "{w}x{h} n={others}: {rect:?} outside {area:?}");
+                    assert!(!main.shrink(0.5).intersects(*rect), "{w}x{h} n={others}: strip overlaps main");
+                }
+                for pair in strip.windows(2) {
+                    assert!(!pair[0].shrink(0.5).intersects(pair[1]), "strip tiles overlap");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn identity_colour_is_stable_per_name() {
         assert_eq!(name_color("Вадим"), name_color("Вадим"));
     }
@@ -476,6 +573,9 @@ impl FriendsApp {
         }
         egui::CentralPanel::default().frame(egui::Frame::none().fill(STAGE))
             .show(ctx, |ui| self.stage(ui));
+        if self.share_picker_open {
+            self.share_picker(ctx);
+        }
     }
 
     // Left rail ─────────────────────────────────────────────────────────────
@@ -523,7 +623,8 @@ impl FriendsApp {
                         let outdated = peer.protocol != PROTOCOL_VERSION;
                         person_row(ui, 18.0, &peer.name,
                             outdated.then_some(("Потрібне оновлення", RED)), speaking,
-                            self.video_textures.contains_key(&(peer.id, StreamKind::Camera)).then_some(ph::VIDEO_CAMERA));
+                            if self.video_textures.contains_key(&(peer.id, StreamKind::Screen)) { Some(ph::MONITOR_ARROW_UP) }
+                                else if self.video_textures.contains_key(&(peer.id, StreamKind::Camera)) { Some(ph::VIDEO_CAMERA) } else { None });
                     }
                     if nav_row(ui, ph::HASH, "Чат", !self.focus_mode, true, self.chat_unread).clicked() {
                         self.focus_mode = false;
@@ -722,61 +823,272 @@ impl FriendsApp {
                 });
             });
 
+        if self.screen.is_some() {
+            self.share_banner(ui);
+        }
+
         egui::TopBottomPanel::bottom("callbar").exact_height(92.0)
             .frame(egui::Frame::none().fill(STAGE))
             .show_inside(ui, |ui| self.call_bar(ui));
 
         let area = ui.available_rect_before_wrap().shrink2(Vec2::new(24.0, 14.0));
         ui.allocate_rect(ui.available_rect_before_wrap(), Sense::hover());
-        let alone = self.peers.is_empty();
-        let hint_height = if alone { 44.0 } else { 0.0 };
-        let grid_area = Rect::from_min_max(area.min, area.max - Vec2::new(0.0, hint_height));
-        let in_voice = self.voice.is_some();
+        self.stage_tiles(ui, area);
+    }
 
-        // Everyone in the room is on stage; friends who have not joined voice
-        // are shown only in the sidebar.
-        struct Entry { name: String, note: Option<&'static str>, speaking: bool, id: Option<u64>, badge: Option<&'static str> }
-        let mut entries = vec![Entry {
+    /// Everything that can be on stage: people's cameras and shared screens.
+    fn stage_tiles(&mut self, ui: &mut Ui, area: Rect) {
+        let in_voice = self.voice.is_some();
+        let local_id = self.mesh.as_ref().map(|m| m.id).unwrap_or(0);
+        struct Tile { key: (u64, StreamKind), name: String, note: Option<String>, speaking: bool,
+                      badge: Option<&'static str>, contain: bool }
+        let mut tiles = vec![Tile {
+            key: (local_id, StreamKind::Camera),
             name: self.settings.nickname.clone(),
-            note: Some("ти"),
+            note: Some("ти".into()),
             speaking: self.voice.as_ref().is_some_and(|v| v.transmitting.load(Ordering::Relaxed)),
-            id: self.mesh.as_ref().map(|m| m.id),
             badge: if !in_voice { None }
                 else if self.deafened.load(Ordering::Relaxed) { Some(ph::SPEAKER_SLASH) }
                 else if !self.mic_enabled.load(Ordering::Relaxed) { Some(ph::MICROPHONE_SLASH) }
                 else { None },
+            contain: false,
         }];
+        // Friends who have not joined voice are shown only in the sidebar.
         for peer in self.peers.iter().filter(|p| p.voice || !in_voice) {
-            entries.push(Entry {
+            tiles.push(Tile {
+                key: (peer.id, StreamKind::Camera),
                 name: peer.name.clone(),
-                note: (peer.protocol != PROTOCOL_VERSION).then_some("потрібне оновлення"),
+                note: (peer.protocol != PROTOCOL_VERSION).then(|| "потрібне оновлення".to_string()),
                 speaking: self.voice.as_ref().is_some_and(|v| v.is_speaking(peer.id)),
-                id: Some(peer.id),
                 badge: None,
+                contain: false,
             });
         }
+        let mut screens: Vec<u64> = self.video_textures.keys()
+            .filter(|k| k.1 == StreamKind::Screen).map(|k| k.0).collect();
+        screens.sort_unstable();
+        for id in screens {
+            let (name, note) = if id == local_id {
+                (self.settings.nickname.clone(), "твій показ екрана".to_string())
+            } else {
+                (self.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default(),
+                 "показує екран".to_string())
+            };
+            tiles.push(Tile { key: (id, StreamKind::Screen), name, note: Some(note), speaking: false, badge: None, contain: true });
+        }
+
+        // A friend's screen automatically becomes the big picture; a click pins any tile instead.
+        let automatic = tiles.iter().find(|t| t.key.1 == StreamKind::Screen && t.key.0 != local_id).map(|t| t.key);
+        let spotlight = self.spotlight.filter(|k| tiles.iter().any(|t| t.key == *k)).or(automatic);
         let gap = 12.0;
-        let (columns, tile_w, tile_h) = best_grid(entries.len(), grid_area.width(), grid_area.height(), gap);
-        let rows = entries.len().div_ceil(columns);
-        let total_h = rows as f32 * tile_h + gap * (rows - 1) as f32;
-        let top = grid_area.center().y - total_h * 0.5;
-        for (index, entry) in entries.iter().enumerate() {
-            let (row, column) = (index / columns, index % columns);
-            let in_row = (entries.len() - row * columns).min(columns);
-            let row_w = in_row as f32 * tile_w + gap * (in_row - 1) as f32;
-            let left = grid_area.center().x - row_w * 0.5;
-            let rect = Rect::from_min_size(
-                Pos2::new(left + column as f32 * (tile_w + gap), top + row as f32 * (tile_h + gap)),
-                Vec2::new(tile_w, tile_h));
-            let texture = entry.id.and_then(|id| self.video_textures.get(&(id, StreamKind::Camera)));
-            paint_tile(ui, rect, &entry.name, entry.note, entry.speaking, texture, entry.badge);
+        let mut clicked: Option<(u64, StreamKind)> = None;
+        let mut double_clicked = false;
+
+        if let Some(big) = spotlight {
+            let others: Vec<&Tile> = tiles.iter().filter(|t| t.key != big).collect();
+            let (main, strip) = spotlight_layout(area, others.len(), gap);
+            if let Some(tile) = tiles.iter().find(|t| t.key == big) {
+                let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
+                    badge: tile.badge, contain: tile.contain, small: false, salt: tile.key };
+                let response = paint_tile(ui, main, &view, self.video_textures.get(&tile.key));
+                if response.double_clicked() { double_clicked = true; }
+                response.on_hover_text("Двічі клікни, щоб розгорнути на весь екран");
+            }
+            for (tile, rect) in others.iter().zip(strip) {
+                let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
+                    badge: tile.badge, contain: tile.contain, small: true, salt: tile.key };
+                if paint_tile(ui, rect, &view, self.video_textures.get(&tile.key)).clicked() {
+                    clicked = Some(tile.key);
+                }
+            }
+        } else {
+            let alone = self.peers.is_empty() && self.screen.is_none();
+            let hint_height = if alone { 44.0 } else { 0.0 };
+            let grid_area = Rect::from_min_max(area.min, area.max - Vec2::new(0.0, hint_height));
+            let (columns, tile_w, tile_h) = best_grid(tiles.len(), grid_area.width(), grid_area.height(), gap);
+            let rows = tiles.len().div_ceil(columns);
+            let total_h = rows as f32 * tile_h + gap * (rows - 1) as f32;
+            let top = grid_area.center().y - total_h * 0.5;
+            for (index, tile) in tiles.iter().enumerate() {
+                let (row, column) = (index / columns, index % columns);
+                let in_row = (tiles.len() - row * columns).min(columns);
+                let row_w = in_row as f32 * tile_w + gap * (in_row - 1) as f32;
+                let left = grid_area.center().x - row_w * 0.5;
+                let rect = Rect::from_min_size(
+                    Pos2::new(left + column as f32 * (tile_w + gap), top + row as f32 * (tile_h + gap)),
+                    Vec2::new(tile_w, tile_h));
+                let view = TileView { name: &tile.name, note: tile.note.as_deref(), speaking: tile.speaking,
+                    badge: tile.badge, contain: tile.contain, small: false, salt: tile.key };
+                let response = paint_tile(ui, rect, &view, self.video_textures.get(&tile.key));
+                if response.clicked() && tiles.len() > 1 { clicked = Some(tile.key); }
+            }
+            if alone {
+                let center = Pos2::new(area.center().x, top + total_h + 26.0);
+                ui.painter().text(center, Align2::CENTER_CENTER,
+                    "Тут поки тільки ти. Додай друга за IP у лівій панелі.",
+                    FontId::proportional(13.5), TEXT3);
+            }
         }
-        if alone {
-            let center = Pos2::new(area.center().x, top + total_h + 26.0);
-            ui.painter().text(center, Align2::CENTER_CENTER,
-                "Тут поки тільки ти. Додай друга за IP у лівій панелі.",
-                FontId::proportional(13.5), TEXT3);
+        if let Some(key) = clicked { self.spotlight = Some(key); }
+        if double_clicked {
+            self.focus_mode = !self.focus_mode;
+            if !self.focus_mode { self.chat_unread = 0; }
         }
+    }
+
+    /// Strip under the top bar while you are sharing your screen.
+    fn share_banner(&mut self, ui: &mut Ui) {
+        let Some(share) = self.screen.as_ref() else { return; };
+        let (width, height) = (share.stats.width.load(Ordering::Relaxed), share.stats.height.load(Ordering::Relaxed));
+        let overloaded = share.stats.overloaded.load(Ordering::Relaxed);
+        let title = share.title.clone();
+        let fps = share.quality.fps;
+        let viewers = self.peers.iter().filter(|p| p.voice).count();
+        let mbps = self.share_rate.2;
+        let mut stop = false;
+        egui::TopBottomPanel::top("share_banner").exact_height(46.0)
+            .frame(egui::Frame::none().fill(STAGE.lerp_to_gamma(ACCENT, 0.16)).inner_margin(Margin::symmetric(18.0, 0.0)))
+            .show_inside(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(text(ph::MONITOR_ARROW_UP, 20.0, ACCENT));
+                    let name = truncated(ui, &format!("Ти показуєш: {title}"), semibold(14.0), TEXT, (ui.available_width() * 0.42).max(120.0));
+                    ui.label(egui::WidgetText::Galley(name));
+                    let detail = if width == 0 { "запуск…".to_string() } else {
+                        format!("{width}×{height} · {fps} к/с · {} Мбіт/с", format!("{mbps:.1}").replace('.', ","))
+                    };
+                    ui.label(text(detail, 12.5, TEXT2));
+                    if viewers == 0 { ui.label(text("У каналі поки ніхто не бачить показ", 12.5, TEXT3)); }
+                    else { ui.label(text(format!("дивляться: {viewers}"), 12.5, TEXT2)); }
+                    if overloaded {
+                        ui.label(text(format!("{} Комп'ютер не встигає: зменш якість або частоту кадрів", ph::WARNING), 12.5, WARN));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if pill_button(ui, "Зупинити показ", RED, Color32::WHITE, Vec2::new(0.0, 30.0), true) { stop = true; }
+                    });
+                });
+            });
+        if stop { self.stop_screen_share(None); }
+    }
+
+    /// "What do you want to show?" window: pick a screen or a window and the quality.
+    fn share_picker(&mut self, ctx: &egui::Context) {
+        let screen_rect = ctx.screen_rect();
+        egui::Area::new("share_dim".into()).order(egui::Order::Middle).fixed_pos(screen_rect.min)
+            .show(ctx, |ui| {
+                let (rect, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
+                ui.painter().rect_filled(rect, Rounding::ZERO, Color32::from_black_alpha(150));
+                if response.clicked() { self.share_picker_open = false; }
+            });
+
+        let friends = self.peers.iter().filter(|p| p.voice).count();
+        let mut start = false;
+        let mut close = false;
+        let mut refresh = false;
+        egui::Window::new("share_picker").title_bar(false).collapsible(false).resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO).min_width(580.0).max_width(580.0)
+            .frame(egui::Frame::none().fill(CHAT).stroke(Stroke::new(1.0_f32, LINE)).rounding(Rounding::same(14.0))
+                .inner_margin(Margin::same(22.0))
+                .shadow(egui::Shadow { offset: Vec2::new(0.0, 12.0), blur: 32.0, spread: 0.0, color: Color32::from_black_alpha(140) }))
+            .show(ctx, |ui| {
+                ui.label(strong("Що показати друзям?", 19.0, TEXT));
+                ui.add_space(2.0);
+                Self::hint(ui, "Друзі в каналі побачать це великим зображенням. Звук комп'ютера поки не передається.");
+                ui.add_space(12.0);
+
+                let screens = self.share_sources.iter().filter(|s| !s.is_window()).count();
+                let windows = self.share_sources.iter().filter(|s| s.is_window()).count();
+                ui.horizontal(|ui| {
+                    if let Some(tab) = segmented(ui, &[format!("Екран ({screens})"), format!("Вікно ({windows})")], self.share_tab) {
+                        if tab != self.share_tab {
+                            self.share_tab = tab;
+                            self.share_selected = self.share_sources.iter().position(|s| s.is_window() == (tab == 1));
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon_button(ui, ph::ARROWS_CLOCKWISE, "Оновити список", false, 32.0) { refresh = true; }
+                    });
+                });
+                ui.add_space(8.0);
+
+                let want_windows = self.share_tab == 1;
+                let visible: Vec<usize> = (0..self.share_sources.len())
+                    .filter(|i| self.share_sources[*i].is_window() == want_windows).collect();
+                egui::Frame::none().fill(STAGE).rounding(Rounding::same(10.0)).inner_margin(Margin::same(6.0)).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("share_sources").max_height(236.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if visible.is_empty() {
+                            ui.add_space(14.0);
+                            ui.vertical_centered(|ui| {
+                                if cfg!(windows) {
+                                    ui.label(strong(if want_windows { "Немає вікон для показу" } else { "Екрани не знайдено" }, 14.0, TEXT));
+                                    ui.label(text("Відкрий потрібну програму й натисни «Оновити список».", 12.5, TEXT3));
+                                } else {
+                                    ui.label(strong("Показ екрана працює лише у Windows", 14.0, TEXT));
+                                }
+                            });
+                            ui.add_space(14.0);
+                        }
+                        for index in visible.iter().copied() {
+                            let source = &self.share_sources[index];
+                            let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 50.0), Sense::click());
+                            let selected = self.share_selected == Some(index);
+                            if selected || response.hovered() {
+                                ui.painter().rect_filled(rect, Rounding::same(8.0), if selected { RAISED } else { RAISED.linear_multiply(0.5) });
+                            }
+                            if selected {
+                                ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.5_f32, ACCENT));
+                            }
+                            ui.painter().text(Pos2::new(rect.left() + 26.0, rect.center().y), Align2::CENTER_CENTER,
+                                if source.is_window() { ph::APP_WINDOW } else { ph::MONITOR },
+                                FontId::proportional(24.0), if selected { ACCENT } else { TEXT2 });
+                            let title = truncated(ui, &source.title, semibold(14.0), TEXT, rect.width() - 64.0);
+                            let detail = truncated(ui, &source.detail, FontId::proportional(12.0), TEXT3, rect.width() - 64.0);
+                            ui.painter().galley(Pos2::new(rect.left() + 52.0, rect.top() + 8.0), title, TEXT);
+                            ui.painter().galley(Pos2::new(rect.left() + 52.0, rect.top() + 28.0), detail, TEXT3);
+                            if response.clicked() { self.share_selected = Some(index); }
+                            if response.double_clicked() { self.share_selected = Some(index); start = true; }
+                        }
+                    });
+                });
+                ui.add_space(14.0);
+
+                ui.label(strong("Якість", 14.0, TEXT));
+                ui.add_space(4.0);
+                ui.label(text("Роздільність", 12.5, TEXT3));
+                let labels: Vec<String> = screen::RESOLUTIONS.iter().map(|(_, l)| l.to_string()).collect();
+                let current = screen::RESOLUTIONS.iter().position(|(h, _)| *h == self.share_quality.max_height).unwrap_or(1);
+                if let Some(i) = segmented(ui, &labels, current) { self.share_quality.max_height = screen::RESOLUTIONS[i].0; }
+                ui.add_space(6.0);
+                ui.label(text("Кадрів за секунду", 12.5, TEXT3));
+                let labels: Vec<String> = screen::FRAME_RATES.iter().map(|f| f.to_string()).collect();
+                let current = screen::FRAME_RATES.iter().position(|f| *f == self.share_quality.fps).unwrap_or(1);
+                if let Some(i) = segmented(ui, &labels, current) { self.share_quality.fps = screen::FRAME_RATES[i]; }
+                ui.add_space(8.0);
+
+                let source_size = self.share_selected.and_then(|i| self.share_sources.get(i)).map(|s| s.size)
+                    .filter(|(w, h)| *w > 0 && *h > 0).unwrap_or((1920, 1080));
+                let (out_w, out_h) = self.share_quality.output_size(source_size.0, source_size.1);
+                let mbps = self.share_quality.bitrate(out_w, out_h) as f32 / 1_000_000.0;
+                let each = format!("{mbps:.1}").replace('.', ",");
+                let total = if friends > 1 { format!(", разом ≈{} Мбіт/с", format!("{:.1}", mbps * friends as f32).replace('.', ",")) } else { String::new() };
+                Self::hint(ui, format!("Буде надіслано {out_w}×{out_h}, {} к/с: ≈{each} Мбіт/с кожному другові{total}.", self.share_quality.fps));
+                if self.share_quality.fps == 60 || self.share_quality.max_height >= 1440 {
+                    ui.label(text("Висока якість сильно навантажує процесор і канал. Якщо показ смикається, зменш її.", 12.5, WARN));
+                }
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if primary_button(ui, "Почати показ", self.share_selected.is_some()) { start = true; }
+                        if quiet_button(ui, "Скасувати") { close = true; }
+                    });
+                });
+            });
+        if refresh {
+            self.share_sources = screen::list_sources();
+            self.share_selected = self.share_sources.iter().position(|s| s.is_window() == (self.share_tab == 1));
+        }
+        if close { self.share_picker_open = false; }
+        if start { self.start_screen_share(); }
     }
 
     fn call_bar(&mut self, ui: &mut Ui) {
@@ -818,8 +1130,12 @@ impl FriendsApp {
                     self.mesh.is_some(), d) {
                     self.toggle_camera();
                 }
-                round_button(ui, ph::MONITOR_ARROW_UP, "Демонстрація екрана поки недоступна",
-                    RAISED, TEXT, false, d);
+                let sharing = self.screen.is_some();
+                if round_button(ui, ph::MONITOR_ARROW_UP,
+                    if sharing { "Зупинити показ екрана" } else { "Показати екран або вікно" },
+                    if sharing { ACCENT } else { RAISED }, if sharing { ACCENT_INK } else { TEXT }, true, d) {
+                    if sharing { self.stop_screen_share(None); } else { self.open_share_picker(); }
+                }
                 ui.add_space(6.0);
                 if pill_button(ui, "Вийти", RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
                     self.toggle_voice();
@@ -1192,7 +1508,10 @@ impl FriendsApp {
         let local_id = self.mesh.as_ref().map(|m| m.id);
         let texture = local_id.and_then(|id| self.video_textures.get(&(id, StreamKind::Camera)));
         let note = if starting { Some("запуск камери") } else if !on { Some("камеру вимкнено") } else { None };
-        paint_tile(ui, rect, &self.settings.nickname.clone(), note, false, texture, None);
+        let nickname = self.settings.nickname.clone();
+        let view = TileView { name: &nickname, note, speaking: false, badge: None, contain: false, small: false,
+            salt: (local_id.unwrap_or(0), StreamKind::Camera) };
+        paint_tile(ui, rect, &view, texture);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if on {
@@ -1284,8 +1603,8 @@ impl FriendsApp {
                 video.frames_recovered.load(Ordering::Relaxed)));
         }
 
-        Self::group(ui, "Демонстрація екрана");
-        Self::hint(ui, "Ще не реалізована.");
+        Self::group(ui, "Показ екрана");
+        Self::hint(ui, "Натисни кнопку з монітором у панелі дзвінка: можна показати весь екран або одне вікно. Роздільність і частоту кадрів обираєш у тому ж вікні, вибір запам'ятовується.");
     }
 
     fn settings_general(&mut self, ui: &mut Ui) {

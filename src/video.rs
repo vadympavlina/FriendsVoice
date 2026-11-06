@@ -639,6 +639,9 @@ impl VideoSession {
             frames_recovered,
         })
     }
+    /// Channel for pictures that should appear in the UI (used by screen sharing).
+    pub fn events_sender(&self) -> SyncSender<VideoEvent> { self.events_tx.clone() }
+    pub fn local_id(&self) -> u64 { self.local_id }
     /// The H.264 network hub, shared with screen sharing.
     pub fn hub(&self) -> Arc<StreamHub> { Arc::clone(&self.hub) }
     /// H.264 frames received from friends (camera and screens).
