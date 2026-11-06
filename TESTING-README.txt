@@ -40,6 +40,23 @@ PUSH-TO-TALK
  2. Enable Push-to-Talk, join a call, hold the key: the top bar shows who
     is talking. F9 cannot be assigned (reserved for the mic toggle).
 
+SCREEN SHARING (Windows 10 1903+ / Windows 11)
+ 1. Join a call with a friend. Press the monitor button in the call bar.
+ 2. Share a whole screen: the friend sees it as the big picture, the other
+    people in a strip. Check text sharpness at 1080p/30 and smoothness while
+    moving a window or scrolling.
+ 3. Share one window (e.g. a browser). Minimise it, close it: sharing must
+    stop with a clear message. Share a game window if possible.
+ 4. Try 60 fps and 1440p; watch the banner: it warns when the PC cannot keep up.
+ 5. Click a small tile to enlarge it, double-click the big one for full screen.
+ 6. Stop sharing from the banner or the call bar. A friend who joins later must
+    see the picture within a second or two.
+
+SOUNDS
+ Mic/sound/camera/screen on-off tones, your own join/leave chime, and a
+ distinct bell when a friend joins or leaves. Settings > Sound has a test
+ panel and a volume slider. F9 (global mic) must play the tone too.
+
 GENERAL CHECKLIST
  1. Start at 960x620, 1366x768 and 1920x1080; try 125% and 150% scaling.
  2. Join the voice channel, test mic, sound, Ctrl+M and F9.

@@ -178,6 +178,8 @@ pub struct FriendsApp {
     peers: Vec<PeerView>,
     network_error: Option<String>,
     friend_ip: String,
+    friend_ip_error: Option<String>,
+    nickname_draft: String,
     draft: String,
     messages: Vec<ChatEntry>,
     voice: Option<VoiceSession>,
@@ -240,6 +242,7 @@ impl Default for FriendsApp {
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
         let saved_video_quality = settings.video_quality.min(5);
         let saved_noise_gate = settings.noise_gate;
+        let saved_nickname = settings.nickname.clone();
         let saved_output_device = settings.output_device.clone();
         let saved_sounds_enabled = settings.sounds_enabled;
         let saved_sounds_volume = settings.sounds_volume.clamp(0.0, 1.0);
@@ -258,11 +261,13 @@ impl Default for FriendsApp {
             peers: vec![],
             network_error,
             friend_ip: String::new(),
+            friend_ip_error: None,
+            nickname_draft: saved_nickname,
             draft: String::new(),
             messages: vec![ChatEntry {
                 time: clock_now(),
                 name: String::new(),
-                text: "Friends Voice працює без сервера! Друзі з однієї мережі Radmin VPN можуть знайти одне одного автоматично. Якщо ні — додай IP друга один раз.".into(),
+                text: "Це чат кімнати: його бачать усі, хто зараз у мережі. Повідомлення не зберігаються після закриття програми.".into(),
                 system: true,
                 repeat: 1,
             }],
@@ -281,7 +286,7 @@ impl Default for FriendsApp {
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
             settings_open: false,
-            settings_page: 0,
+            settings_page: 1,
             sidebar_open: true,
             focus_mode: false,
             chat_search_open: false,
@@ -384,9 +389,16 @@ impl FriendsApp {
                     mesh.add_peer(address);
                 }
                 self.friend_ip.clear();
-                self.notice(format!("Пробуємо знайти друга за адресою {text}."));
+                self.friend_ip_error = None;
+                self.notice(format!("Шукаю друга за адресою {text}. Він з'явиться в списку, щойно відповість."));
             }
-            None => self.notice("Введи IPv4-адресу друга з Radmin VPN, наприклад 26.12.34.56."),
+            None => {
+                self.friend_ip_error = Some(if text.is_empty() {
+                    "Введи адресу друга, наприклад 26.12.34.56".to_string()
+                } else {
+                    format!("«{text}» не схоже на адресу Radmin VPN. Вона має вигляд 26.12.34.56")
+                });
+            }
         }
     }
 
@@ -463,7 +475,11 @@ impl FriendsApp {
                 }
                 self.notice("Голос підключено напряму до друзів. Камеру можна вмикати окремо.");
             }
-            Err(error) => self.notice(format!("Не вдалося запустити голос: {error}")),
+            Err(error) => {
+                self.notice(format!("Не вдалося увійти в голос: {error}. Перевір мікрофон і навушники в налаштуваннях звуку."));
+                self.settings_open = true;
+                self.settings_page = 1;
+            }
         }
     }
 
@@ -640,7 +656,7 @@ impl FriendsApp {
     /// The preview camera must never stay on unnoticed: switch it off as soon as
     /// the user is neither in a call nor looking at the camera settings.
     fn stop_orphan_preview(&mut self) {
-        let watching = self.settings_open && self.settings_page == 1;
+        let watching = self.settings_open && self.settings_page == 2;
         if self.voice.is_none() && !watching && self.video.is_some() {
             self.video = None;
             self.video_textures.clear();

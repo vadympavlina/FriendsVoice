@@ -660,15 +660,18 @@ impl FriendsApp {
 
     fn network_block(&mut self, ui: &mut Ui) {
         let ip = self.mesh.as_ref().and_then(|m| m.local_radmin_ips.first().copied());
+        let connected = self.mesh.is_some();
+        // One plain sentence about the connection, then what to do about it.
+        let (color, status) = if !connected { (RED, "Немає з'єднання") }
+            else if ip.is_none() { (WARN, "Radmin VPN не знайдено") }
+            else { (GREEN, "Підключено до Radmin VPN") };
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            let connected = self.mesh.is_some();
             let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-            ui.painter().circle_filled(dot.center(), 3.5, if connected { GREEN } else { RED });
-            ui.label(text(if connected { "P2P працює, сервера немає" } else { "Немає з'єднання" },
-                13.0, TEXT2));
+            ui.painter().circle_filled(dot.center(), 3.5, color);
+            ui.label(text(status, 13.0, TEXT));
         });
-        if self.mesh.is_none() {
+        if !connected {
             if let Some(error) = &self.network_error {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
@@ -677,35 +680,37 @@ impl FriendsApp {
             }
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                if primary_button(ui, "Спробувати знову", true) {
-                    self.retry_network();
-                }
+                if primary_button(ui, "Спробувати знову", true) { self.retry_network(); }
+            });
+        } else if ip.is_none() {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.add(egui::Label::new(text(
+                    "Запусти Radmin VPN і зайди в мережу з друзями. Тоді тут з'явиться твоя адреса.", 12.5, TEXT3)).wrap());
+            });
+        }
+        if let Some(ip) = ip {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(text("Твоя адреса, її треба дати друзям", 12.0, TEXT3));
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(mono(ip.to_string(), 14.0, TEXT));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    let copied = self.ip_copied_at.is_some_and(|t| t.elapsed().as_secs() < 2);
+                    if icon_button(ui, if copied { ph::CHECK } else { ph::COPY },
+                        if copied { "Скопійовано" } else { "Скопіювати свою адресу" }, false, 28.0) {
+                        ui.output_mut(|o| o.copied_text = ip.to_string());
+                        self.ip_copied_at = Some(Instant::now());
+                    }
+                });
             });
         }
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            match ip {
-                Some(ip) => {
-                    ui.label(mono(ip.to_string(), 13.0, TEXT));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(4.0);
-                        let copied = self.ip_copied_at.is_some_and(|t| t.elapsed().as_secs() < 2);
-                        if icon_button(ui, if copied { ph::CHECK } else { ph::COPY },
-                            if copied { "Скопійовано" } else { "Скопіювати свою адресу" }, false, 28.0) {
-                            ui.output_mut(|o| o.copied_text = ip.to_string());
-                            self.ip_copied_at = Some(Instant::now());
-                        }
-                    });
-                }
-                None => {
-                    ui.add(egui::Label::new(text(
-                        "Адресу 26.x.x.x не знайдено. Запусти Radmin VPN.", 12.5, TEXT3)).wrap());
-                }
-            }
-        });
-        ui.add_space(4.0);
-        if nav_row(ui, ph::USER_PLUS, "Додати друга за IP", self.add_friend_open, true, 0).clicked() {
+        if nav_row(ui, ph::USER_PLUS, "Додати друга за адресою", self.add_friend_open, true, 0).clicked() {
             self.add_friend_open = !self.add_friend_open;
         }
         if self.add_friend_open {
@@ -713,12 +718,20 @@ impl FriendsApp {
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width() - 8.0);
+                    ui.add(egui::Label::new(text(
+                        "Друзі зазвичай знаходяться самі. Якщо ні, введи адресу друга з його Radmin VPN: вона починається з 26. Програма запам'ятає її.",
+                        12.0, TEXT3)).wrap());
+                    ui.add_space(2.0);
                     let entry = ui.add(egui::TextEdit::singleline(&mut self.friend_ip)
                         .hint_text("26.12.34.56")
                         .font(FontId::monospace(13.0))
                         .margin(Margin::symmetric(10.0, 8.0))
                         .desired_width(f32::INFINITY));
+                    if entry.changed() { self.friend_ip_error = None; }
                     let submit = entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if let Some(error) = &self.friend_ip_error {
+                        ui.add(egui::Label::new(text(error.clone(), 12.0, RED)).wrap());
+                    }
                     ui.add_space(2.0);
                     if (primary_button(ui, "Знайти друга", self.mesh.is_some()) || submit)
                         && self.mesh.is_some() {
@@ -750,7 +763,7 @@ impl FriendsApp {
                 let tint = |on: bool| if on { RED } else { TEXT2 };
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(32.0),
                     if voice { Sense::click() } else { Sense::hover() });
-                let resp = resp.on_hover_text(if deaf { "Увімкнути звук" } else { "Вимкнути звук" });
+                let resp = resp.on_hover_text(if !voice { "Зайди в голосовий канал, щоб керувати звуком" } else if deaf { "Увімкнути звук" } else { "Вимкнути звук" });
                 if voice && resp.hovered() {
                     ui.painter().rect_filled(rect, Rounding::same(8.0), HOVER);
                 }
@@ -759,8 +772,8 @@ impl FriendsApp {
                 if voice && resp.clicked() { self.deafened.store(!deaf, Ordering::Relaxed); }
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(32.0),
                     if voice { Sense::click() } else { Sense::hover() });
-                let resp = resp.on_hover_text(if mic { "Вимкнути мікрофон · Ctrl+M" }
-                    else { "Увімкнути мікрофон · Ctrl+M" });
+                let resp = resp.on_hover_text(if !voice { "Зайди в голосовий канал, щоб користуватися мікрофоном" }
+                    else if mic { "Вимкнути мікрофон · Ctrl+M" } else { "Увімкнути мікрофон · Ctrl+M" });
                 if voice && resp.hovered() {
                     ui.painter().rect_filled(rect, Rounding::same(8.0), HOVER);
                 }
@@ -827,13 +840,81 @@ impl FriendsApp {
             self.share_banner(ui);
         }
 
-        egui::TopBottomPanel::bottom("callbar").exact_height(92.0)
-            .frame(egui::Frame::none().fill(STAGE))
-            .show_inside(ui, |ui| self.call_bar(ui));
+        let in_voice = self.voice.is_some();
+        if in_voice || self.focus_mode {
+            egui::TopBottomPanel::bottom("callbar").exact_height(92.0)
+                .frame(egui::Frame::none().fill(STAGE))
+                .show_inside(ui, |ui| self.call_bar(ui));
+        }
 
         let area = ui.available_rect_before_wrap().shrink2(Vec2::new(24.0, 14.0));
         ui.allocate_rect(ui.available_rect_before_wrap(), Sense::hover());
-        self.stage_tiles(ui, area);
+        if in_voice || self.focus_mode {
+            self.stage_tiles(ui, area);
+        } else {
+            self.lobby(ui, area);
+        }
+    }
+
+    /// What you see before joining the call: who is in the channel and how to start.
+    fn lobby(&mut self, ui: &mut Ui, area: Rect) {
+        let in_channel: Vec<String> = self.peers.iter().filter(|p| p.voice).map(|p| p.name.clone()).collect();
+        let nobody_online = self.peers.is_empty();
+        let ip = self.mesh.as_ref().and_then(|m| m.local_radmin_ips.first().copied());
+        let content_h = if nobody_online { 400.0 } else { 270.0 };
+        let width = area.width().min(540.0);
+        let rect = Rect::from_center_size(
+            Pos2::new(area.center().x, (area.center().y).max(area.top() + content_h * 0.5)),
+            Vec2::new(width, content_h.min(area.height())));
+        ui.allocate_new_ui(
+            egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)),
+            |ui| {
+                brand_mark(ui, 88.0);
+                ui.add_space(10.0);
+                ui.label(strong("Загальний голосовий канал", 22.0, TEXT));
+                ui.add_space(2.0);
+                ui.label(text(
+                    if in_channel.is_empty() { "У каналі поки нікого".to_string() }
+                    else { format!("У каналі: {}", in_channel.join(", ")) },
+                    14.0, TEXT2));
+                ui.add_space(16.0);
+                if pill_button(ui, "Приєднатися до голосу", ACCENT, ACCENT_INK, Vec2::new(250.0, 48.0), self.mesh.is_some()) {
+                    self.toggle_voice();
+                }
+                if self.mesh.is_none() {
+                    ui.add_space(6.0);
+                    ui.label(text("Спершу відновіть з'єднання в лівій панелі.", 12.5, RED));
+                }
+                if nobody_online {
+                    ui.add_space(26.0);
+                    egui::Frame::none().fill(CHAT).rounding(Rounding::same(12.0)).inner_margin(Margin::same(16.0)).show(ui, |ui| {
+                        ui.set_width(width - 32.0);
+                        ui.label(strong("Як позвати друзів", 14.0, TEXT));
+                        ui.add_space(4.0);
+                        for step in [
+                            "1. Усі встановлюють Radmin VPN і заходять в одну мережу.",
+                            "2. Друзі знайдуться самі. Якщо ні, обміняйтеся адресами Radmin.",
+                            "3. Натисни «Приєднатися до голосу».",
+                        ] {
+                            ui.add(egui::Label::new(text(step, 13.0, TEXT2)).wrap());
+                        }
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if let Some(ip) = ip {
+                                if quiet_button(ui, "Скопіювати мою адресу") {
+                                    ui.output_mut(|o| o.copied_text = ip.to_string());
+                                    self.ip_copied_at = Some(Instant::now());
+                                    self.notice(format!("Адресу {ip} скопійовано. Надішли її другові."));
+                                }
+                            }
+                            if quiet_button(ui, "Додати друга за адресою") {
+                                self.sidebar_open = true;
+                                self.add_friend_open = true;
+                            }
+                        });
+                    });
+                }
+            });
     }
 
     /// Everything that can be on stage: people's cameras and shared screens.
@@ -921,6 +1002,7 @@ impl FriendsApp {
                     badge: tile.badge, contain: tile.contain, small: false, salt: tile.key };
                 let response = paint_tile(ui, rect, &view, self.video_textures.get(&tile.key));
                 if response.clicked() && tiles.len() > 1 { clicked = Some(tile.key); }
+                if tiles.len() > 1 { response.on_hover_text("Клікни, щоб збільшити"); }
             }
             if alone {
                 let center = Pos2::new(area.center().x, top + total_h + 26.0);
@@ -1101,7 +1183,7 @@ impl FriendsApp {
         // Shrink the controls instead of clipping them in narrow windows.
         let room = ui.available_width() - 24.0;
         let d = if room >= 470.0 { 48.0 } else { 40.0 };
-        let leave_width = if room >= 470.0 { 124.0 } else { 96.0 };
+        let leave_width = if room >= 470.0 { 150.0 } else { 96.0 };
         let join_width = if room >= 300.0 { 240.0 } else { room.max(160.0) };
         let gap = 10.0;
         let buttons = 4.0 + if chat_button { 1.0 } else { 0.0 };
@@ -1137,7 +1219,7 @@ impl FriendsApp {
                     if sharing { self.stop_screen_share(None); } else { self.open_share_picker(); }
                 }
                 ui.add_space(6.0);
-                if pill_button(ui, "Вийти", RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
+                if pill_button(ui, if leave_width > 120.0 { "Вийти з каналу" } else { "Вийти" }, RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
                     self.toggle_voice();
                 }
             } else if pill_button(ui, "Приєднатися до голосу", ACCENT, ACCENT_INK,
@@ -1295,34 +1377,37 @@ impl FriendsApp {
         });
         ui.add_space(12.0);
         for (index, (glyph, label)) in [
+            (ph::USER_CIRCLE, "Профіль"),
             (ph::MICROPHONE, "Звук"),
-            (ph::VIDEO_CAMERA, "Відео"),
-            (ph::GEAR, "Загальні"),
-            (ph::WARNING_CIRCLE, "Про програму"),
+            (ph::VIDEO_CAMERA, "Відео й показ екрана"),
+            (ph::SIDEBAR_SIMPLE, "Вигляд і клавіші"),
+            (ph::INFO, "Про програму"),
         ].into_iter().enumerate() {
             if nav_row(ui, glyph, label, self.settings_page == index, true, 0).clicked() {
                 self.settings_page = index;
             }
         }
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            ui.add_space(4.0);
-            if nav_row(ui, ph::X, "Закрити · Esc", false, true, 0).clicked() {
-                self.settings_open = false;
-            }
-        });
     }
 
     fn settings_page_ui(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().id_salt("settings_scroll").auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_max_width(620.0);
-                let title = ["Звук", "Відео", "Загальні", "Про програму"][self.settings_page.min(3)];
-                ui.label(strong(title, 22.0, TEXT));
+                let title = ["Профіль", "Звук", "Відео й показ екрана", "Вигляд і клавіші", "Про програму"][self.settings_page.min(4)];
+                ui.horizontal(|ui| {
+                    ui.label(strong(title, 22.0, TEXT));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon_button(ui, ph::X, "Закрити налаштування · Esc", false, 34.0) {
+                            self.settings_open = false;
+                        }
+                    });
+                });
                 ui.add_space(6.0);
                 match self.settings_page {
-                    0 => self.settings_audio(ui),
-                    1 => self.settings_video(ui),
-                    2 => self.settings_general(ui),
+                    0 => self.settings_profile(ui),
+                    1 => self.settings_audio(ui),
+                    2 => self.settings_video(ui),
+                    3 => self.settings_appearance(ui),
                     _ => self.settings_about(ui),
                 }
                 ui.add_space(32.0);
@@ -1645,62 +1730,74 @@ impl FriendsApp {
         Self::hint(ui, "Натисни кнопку з монітором у панелі дзвінка: можна показати весь екран або одне вікно. Роздільність і частоту кадрів обираєш у тому ж вікні, вибір запам'ятовується.");
     }
 
-    fn settings_general(&mut self, ui: &mut Ui) {
-        Self::group(ui, "Профіль");
+    fn settings_profile(&mut self, ui: &mut Ui) {
+        Self::group(ui, "Твоє ім'я");
         ui.horizontal(|ui| {
             avatar(ui, &self.settings.nickname, 44.0, false);
             ui.vertical(|ui| {
-                ui.label(text("Ім'я в кімнаті", 13.0, TEXT2));
-                let changed = ui.add(egui::TextEdit::singleline(&mut self.settings.nickname)
-                    .margin(Margin::symmetric(10.0, 8.0)).desired_width(260.0)).changed();
-                if changed {
-                    if self.settings.nickname.chars().count() > 24 {
-                        self.settings.nickname = self.settings.nickname.chars().take(24).collect();
+                let field = ui.add(egui::TextEdit::singleline(&mut self.nickname_draft)
+                    .margin(Margin::symmetric(10.0, 8.0)).desired_width(260.0).char_limit(24));
+                // Apply once the user is done typing, not on every letter.
+                let done = field.lost_focus();
+                if done {
+                    let name = self.nickname_draft.trim().to_string();
+                    if name.is_empty() {
+                        self.nickname_draft = self.settings.nickname.clone();
+                    } else if name != self.settings.nickname {
+                        self.settings.nickname = name.clone();
+                        self.nickname_draft = name.clone();
+                        if let Some(mesh) = &self.mesh { mesh.rename(name); }
+                        save_settings(&self.settings);
                     }
-                    if !self.settings.nickname.trim().is_empty() {
-                        if let Some(mesh) = &self.mesh { mesh.rename(self.settings.nickname.clone()); }
-                    }
-                    save_settings(&self.settings);
                 }
             });
         });
+        Self::hint(ui, "Так тебе бачать друзі. Ім'я змінюється, коли натискаєш Enter або клікаєш поза полем.");
 
-        Self::group(ui, "Вигляд");
+        Self::group(ui, "Збережені друзі");
+        Self::hint(ui, format!("Адрес друзів на цьому комп'ютері: {}. Вони потрібні, щоб друзі знаходилися швидше, і нікуди не передаються.",
+            self.settings.known_ips.len()));
+        if !self.settings.known_ips.is_empty() && quiet_button(ui, "Забути збережені адреси") {
+            self.settings.known_ips.clear();
+            save_settings(&self.settings);
+            self.notice("Збережені адреси друзів видалено.");
+        }
+    }
+
+    fn settings_appearance(&mut self, ui: &mut Ui) {
+        Self::group(ui, "Панелі");
         let mut sidebar = self.sidebar_open;
-        if ui.checkbox(&mut sidebar, "Показувати бічну панель").changed() { self.sidebar_open = sidebar; }
+        if ui.checkbox(&mut sidebar, "Показувати ліву панель").changed() { self.sidebar_open = sidebar; }
         let mut theatre = self.focus_mode;
-        if ui.checkbox(&mut theatre, "Театральний режим (без чату)").changed() {
+        if ui.checkbox(&mut theatre, "Театральний режим: сховати чат, дати більше місця відео").changed() {
             self.focus_mode = theatre;
             if !theatre { self.chat_unread = 0; }
         }
         ui.add_space(4.0);
-        if quiet_button(ui, "Скинути вигляд") {
+        if quiet_button(ui, "Показати все, як було") {
             self.sidebar_open = true;
             self.focus_mode = false;
             self.chat_search_open = false;
             self.chat_unread = 0;
             self.chat_search.clear();
-            self.notice("Вигляд скинуто.");
+            self.notice("Панелі повернуто, як було.");
         }
 
         Self::group(ui, "Гарячі клавіші");
         for (keys, action) in [
-            ("Ctrl + M", "Мікрофон"),
-            ("Ctrl + B", "Бічна панель"),
+            ("Ctrl + M", "Увімкнути чи вимкнути мікрофон"),
+            ("F9", "Те саме, але з будь-якого вікна, навіть у грі"),
+            ("Ctrl + B", "Сховати чи показати ліву панель"),
             ("Ctrl + E", "Театральний режим"),
             ("Ctrl + F", "Пошук у чаті"),
-            ("Esc", "Закрити пошук, налаштування чи театральний режим"),
-            ("F9", "Мікрофон у будь-якому вікні"),
+            ("Esc", "Закрити пошук, налаштування чи вікно вибору"),
         ] {
             ui.horizontal(|ui| {
                 ui.add_sized([96.0, 22.0], egui::Label::new(mono(keys, 12.5, TEXT)));
                 ui.label(text(action, 13.0, TEXT2));
             });
         }
-
-        Self::group(ui, "Збережені адреси");
-        Self::hint(ui, format!("Адрес друзів на цьому комп'ютері: {}. Вони нікуди не передаються.",
-            self.settings.known_ips.len()));
+        Self::hint(ui, "Клавішу для Push-to-Talk обирають у розділі «Звук».");
     }
 
     fn settings_about(&mut self, ui: &mut Ui) {

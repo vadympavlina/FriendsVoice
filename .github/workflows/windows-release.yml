@@ -68,8 +68,8 @@ jobs:
           body: |
             Friends Voice Windows build from ${{ github.sha }}.
             Download FriendsVoice-Windows-x64.zip (one EXE inside). Radmin VPN required.
-            Every peer must allow inbound UDP 45888 (chat/discovery), 45889 (voice) and 45890 (webcam) inside the trusted VPN. Webcam requires the Windows privacy setting that lets desktop apps use the camera.
-            New in this build: redesigned minimal interface, camera selection by name with a private preview, 16:9 camera crop, 640x360 quality. Camera is still beta; no end-to-end encryption or screen sharing.
+            Every peer must allow inbound UDP 45888 (chat/discovery), 45889 (voice) and 45890 (webcam) inside the trusted VPN. Webcam requires the Windows privacy setting that lets desktop apps use the camera. Also allow UDP 45891 inside the VPN.
+            New in this build: mascot logo, HD camera up to 1080p30 (H.264), screen and window sharing, interface sounds, clearer first-run screens. UDP 45891 is used for H.264 video. No end-to-end encryption; computer sound is not shared with the screen.
             Everyone in a call should use the same build.
           prerelease: true
           make_latest: false
