@@ -112,7 +112,7 @@ fn webcam_loop(
     let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(
         CameraFormat::new(Resolution::new(640, 480), FrameFormat::MJPEG, 15)
     ));
-    let mut camera = match Camera::new(CameraIndex::index(0), requested) {
+    let mut camera = match Camera::new(CameraIndex::Index(0), requested) {
         Ok(camera) => camera,
         Err(error) => {
             let _ = events.try_send(VideoEvent::Error(format!("Камера недоступна: {error}")));
