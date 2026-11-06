@@ -273,6 +273,7 @@ pub struct VideoSession {
     recv_stop: Arc<AtomicBool>,
     webcam_worker: Option<JoinHandle<()>>,
     recv_worker: Option<JoinHandle<()>>,
+    decode_worker: Option<JoinHandle<()>>,
     events_tx: SyncSender<VideoEvent>,
     events_rx: Receiver<VideoEvent>,
     local_id: u64,
@@ -293,12 +294,32 @@ impl VideoSession {
         let (events_tx, events_rx) = mpsc::sync_channel(12);
         let recv_stop = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&recv_stop);
+        let decode_stop = Arc::clone(&recv_stop);
         let tx = events_tx.clone();
+        let (jpeg_tx, jpeg_rx) = mpsc::sync_channel::<(u64, Vec<u8>, bool)>(6);
         let valid_peers = Arc::clone(&peers);
         let frames_received = Arc::new(AtomicU64::new(0));
         let rx_count = Arc::clone(&frames_received);
         let frames_recovered = Arc::new(AtomicU64::new(0));
         let recovered_count = Arc::clone(&frames_recovered);
+        // JPEG decoding is CPU-intensive. Keep it off the UDP read thread so
+        // four webcams cannot block packet reception and cause extra frame loss.
+        let decode_worker = thread::spawn(move || {
+            while !decode_stop.load(Ordering::Relaxed) {
+                match jpeg_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok((sender_id, jpeg, recovered)) => {
+                        if let Some(frame) = decode_jpeg(sender_id, &jpeg) {
+                            if tx.try_send(VideoEvent::Frame(frame)).is_ok() {
+                                rx_count.fetch_add(1, Ordering::Relaxed);
+                                if recovered { recovered_count.fetch_add(1, Ordering::Relaxed); }
+                            }
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
         let worker = thread::spawn(move || {
             let mut packets = [0u8; 1500];
             let mut partial: HashMap<IpAddr, Assembly> = HashMap::new();
@@ -324,15 +345,10 @@ impl VideoSession {
                         if let Some(jpeg) = entry.insert(part, payload) {
                             let was_recovered = entry.recovered;
                             partial.remove(&source.ip());
-                            if let Some(frame) = decode_jpeg(id, &jpeg) {
-                                if was_recovered {
-                                    recovered_count.fetch_add(1, Ordering::Relaxed);
-                                }
-                                completed.insert(source.ip(), (id, seq, Instant::now()));
-                                if tx.try_send(VideoEvent::Frame(frame)).is_ok() {
-                                    rx_count.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
+                            completed.insert(source.ip(), (id, seq, Instant::now()));
+                            // Bounded queue: drop excess video frames under overload,
+                            // never pause voice or fill the system UDP receive buffer.
+                            let _ = jpeg_tx.try_send((id, jpeg, was_recovered));
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::TimedOut
@@ -352,6 +368,7 @@ impl VideoSession {
             recv_stop,
             webcam_worker: None,
             recv_worker: Some(worker),
+            decode_worker: Some(decode_worker),
             events_tx, events_rx, local_id: id, targets: peers,
             camera_index, quality,
             frames_sent: Arc::new(AtomicU64::new(0)),
@@ -394,6 +411,7 @@ impl Drop for VideoSession {
         self.disable();
         self.recv_stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.recv_worker.take() { let _ = worker.join(); }
+        if let Some(worker) = self.decode_worker.take() { let _ = worker.join(); }
     }
 }
 
