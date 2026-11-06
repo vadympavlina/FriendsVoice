@@ -856,153 +856,218 @@ impl FriendsApp {
 
     pub(super) fn neon_main(&mut self, ui: &mut Ui) {
         ui.vertical(|ui|{
-            ui.horizontal(|ui|{
-                ui.label(RichText::new("Загальний").size(23.0).strong().color(BRIGHT));
-                ui.add_space(8.0);
-                small_chip(ui,"P2P MESH",PURPLE);
-                small_chip(ui,"БЕЗ СЕРВЕРА",BLUE);
-                if self.mesh.as_ref().is_some_and(|m|!m.local_radmin_ips.is_empty()){
-                    small_chip(ui,"RADMIN VPN",GREEN);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                    if icon_button(ui,"Налаштування",Glyph::Settings,true,self.settings_open,false,32.0){
-                        self.settings_open=!self.settings_open;
-                    }
+            ui.add_space(2.0);
+            egui::Frame::none()
+                .fill(Color32::from_rgb(30, 34, 61))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(63, 69, 111)))
+                .rounding(Rounding::same(19.0))
+                .inner_margin(egui::Margin::symmetric(18.0, 14.0))
+                .show(ui, |ui|{
+                    ui.horizontal(|ui|{
+                        ui.vertical(|ui|{
+                            ui.label(RichText::new("YOUR PRIVATE SPACE  /  01")
+                                .size(10.8).strong().color(BLUE));
+                            ui.add_space(1.0);
+                            ui.label(RichText::new("Загальний").size(25.0)
+                                .strong().color(BRIGHT));
+                            ui.label(RichText::new("Простір для голосу, відео та спілкування")
+                                .size(11.8).color(SOFT));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                            if icon_button(ui,"Показати / приховати налаштування",Glyph::Settings,
+                                true,self.settings_open,false,39.0){
+                                self.settings_open=!self.settings_open;
+                            }
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui|{
+                        small_chip(ui,"P2P · DIRECT",PURPLE);
+                        small_chip(ui,if self.voice.is_some(){"ГОЛОС АКТИВНИЙ"}else{"ГОТОВИЙ ДО РОЗМОВИ"},
+                            if self.voice.is_some(){GREEN}else{BLUE});
+                        if self.mesh.as_ref().is_some_and(|m| !m.local_radmin_ips.is_empty()){
+                            small_chip(ui,"RADMIN VPN",GREEN);
+                        }
+                    });
                 });
-            });
-            ui.add_space(5.0);
-            ui.label(RichText::new("Голосовий канал  /  живе P2P-з'єднання")
-                .color(MUTED).size(11.5));
             ui.add_space(13.0);
-            let content_w=ui.available_width();
-            let gap=10.0;
-            let tile_w=((content_w-2.0*gap)/3.0).max(95.0);
-            let tile_h=if ui.available_height()<590.0 {147.0}else{174.0};
+
             ui.horizontal(|ui|{
-                ui.spacing_mut().item_spacing.x=gap;
-                peer_tile(ui,tile_w,tile_h,&self.settings.nickname,
-                    if self.voice.is_some(){"Ти · у голосі"}else{"Ти · онлайн"},
-                    PURPLE,self.voice.is_some(),false,
-                    self.mesh.as_ref().and_then(|m|self.video_textures.get(&m.id)));
-                for i in 0..2{
-                    if let Some(p)=self.peers.get(i){
-                        peer_tile(ui,tile_w,tile_h,&p.name,
-                            if p.protocol != PROTOCOL_VERSION{"Онови до 0.8"}else if p.voice{"У голосовому каналі"}else{"У мережі"},
-                            peer_color(i+1),self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)),false,
-                            self.video_textures.get(&p.id));
-                    }else{
-                        peer_tile(ui,tile_w,tile_h,"","",BLUE,false,true,None);
-                    }
-                }
+                ui.label(RichText::new("УЧАСНИКИ КАНАЛУ").strong().size(11.5)
+                    .color(SOFT));
+                ui.add_space(7.0);
+                small_chip(ui,&format!("{}/{}",self.peers.len()+1,MAX_NODES),PURPLE);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                    ui.label(RichText::new("LIVE ROOM").size(10.0)
+                        .strong().color(MUTED));
+                });
             });
-            // Up to five real participants, with responsive second row.
-            if self.peers.len()>2 {
-                ui.add_space(8.0);
-                let second_row = &self.peers[2..];
-                let secondary_width=((content_w-gap)/2.0).max(95.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x=gap;
-                    for (index, peer) in second_row.iter().take(2).enumerate() {
-                        peer_tile(ui,secondary_width,115.0,&peer.name,
-                            if peer.protocol != PROTOCOL_VERSION{"Онови до 0.8"}else if peer.voice{"У голосовому каналі"}else{"У мережі"},
-                            peer_color(index+3),self.voice.as_ref().is_some_and(|v|v.is_speaking(peer.id)),false,
-                            self.video_textures.get(&peer.id));
+            ui.add_space(8.0);
+
+            // Responsive gallery: 3 columns on spacious desktops, 2 or 1 on
+            // compact windows. It scrolls independently so chat stays usable.
+            let gallery_width=ui.available_width().max(140.0);
+            let columns=if gallery_width>=805.0 {3usize}
+                else if gallery_width>=370.0 {2usize} else {1usize};
+            let gap=11.0;
+            let visible=self.peers.len().saturating_add(1).min(MAX_NODES);
+            let total=visible.max(if columns>1{columns}else{1}).min(MAX_NODES);
+            let gallery_height=((ui.available_height()-310.0)*0.8).clamp(135.0,340.0);
+            egui::ScrollArea::vertical()
+                .id_salt("aurora_gallery")
+                .max_height(gallery_height)
+                .auto_shrink([false,false])
+                .show(ui,|ui|{
+                    ui.set_min_height(gallery_height);
+                    let mut base=0usize;
+                    while base<total {
+                        let row_count=(total-base).min(columns);
+                        let tile_width=((gallery_width-gap*(row_count-1) as f32)
+                            /row_count as f32).max(110.0);
+                        let tile_height=(tile_width*0.53).clamp(132.0,197.0);
+                        ui.horizontal(|ui|{
+                            ui.spacing_mut().item_spacing.x=gap;
+                            for index in base..(base+row_count) {
+                                if index==0 {
+                                    peer_tile(ui,tile_width,tile_height,&self.settings.nickname,
+                                        if self.voice.is_some(){"Ти в голосовому каналі"}else{"Ти онлайн"},
+                                        PURPLE,
+                                        self.voice.as_ref().is_some_and(|v|v.transmitting.load(Ordering::Relaxed)),
+                                        false,
+                                        self.mesh.as_ref().and_then(|m|self.video_textures.get(&m.id)));
+                                } else if let Some(peer)=self.peers.get(index-1) {
+                                    let status = if peer.protocol!=PROTOCOL_VERSION {
+                                        "Потрібне оновлення"
+                                    }else if peer.voice{"У голосовому каналі"}else{"Онлайн"};
+                                    peer_tile(ui,tile_width,tile_height,&peer.name,status,
+                                        peer_color(index),
+                                        self.voice.as_ref().is_some_and(|v|v.is_speaking(peer.id)),
+                                        false,self.video_textures.get(&peer.id));
+                                } else {
+                                    peer_tile(ui,tile_width,tile_height,"","",
+                                        BLUE,false,true,None);
+                                }
+                            }
+                        });
+                        base+=row_count;
+                        if base<total {ui.add_space(gap);}
                     }
                 });
-            }
-            ui.add_space(11.0);
-            // The chat flexes vertically; the footer remains visible.
-            let footer_h=64.0;
-            let chat_h=(ui.available_height()-footer_h-8.0).max(180.0);
+
+            ui.add_space(12.0);
+            // A flexible messages panel fills leftover space while the call
+            // controls remain accessible at the bottom of the central area.
+            let reserved_footer=91.0;
+            let chat_height=(ui.available_height()-reserved_footer-10.0).max(170.0);
             egui::Frame::none()
                 .fill(SURFACE)
                 .stroke(Stroke::new(1.0,BORDER))
-                .rounding(Rounding::same(15.0))
-                .inner_margin(egui::Margin::same(12.0))
+                .rounding(Rounding::same(18.0))
+                .inner_margin(egui::Margin::same(14.0))
                 .show(ui,|ui|{
-                    ui.set_min_height(chat_h-25.0);
+                    ui.set_min_height(chat_height-28.0);
                     ui.horizontal(|ui|{
-                        ui.label(RichText::new("# загальний").strong().size(16.0).color(BRIGHT));
+                        let (r,_) = ui.allocate_exact_size(Vec2::splat(27.0),Sense::hover());
+                        glyph(ui,Glyph::Chat,r,BLUE);
+                        ui.label(RichText::new("Чат · Загальний").size(16.0)
+                            .strong().color(BRIGHT));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            ui.label(text_caption(format!("{} учасників",self.peers.len()+1)));
+                            ui.label(text_caption(format!("{} учасників у мережі",self.peers.len()+1)));
                         });
                     });
+                    ui.add_space(2.0);
                     ui.separator();
-                    let available_chat=(chat_h-94.0).max(72.0);
+                    let list_height=(chat_height-90.0).max(72.0);
                     egui::ScrollArea::vertical()
-                        .id_salt("fv_neon_chat")
-                        .max_height(available_chat)
+                        .id_salt("aurora_chat_feed")
+                        .max_height(list_height)
                         .stick_to_bottom(true)
                         .auto_shrink([false,false])
                         .show(ui,|ui|{
-                            ui.set_min_height(available_chat);
-                            for message in &self.messages{
+                            ui.set_min_height(list_height);
+                            for message in &self.messages {
                                 let mine=message.name==self.settings.nickname && !message.system;
                                 bubble_chat(ui,message,mine);
                                 ui.add_space(9.0);
                             }
                         });
+                    ui.add_space(3.0);
                     ui.separator();
                     ui.horizontal(|ui|{
-                        let available=(ui.available_width()-51.0).max(80.0);
+                        ui.spacing_mut().item_spacing.x=8.0;
+                        let width=(ui.available_width()-46.0).max(65.0);
                         let response=ui.add_enabled(self.mesh.is_some(),
                             egui::TextEdit::singleline(&mut self.draft)
-                                .hint_text("Повідомлення у #загальний…")
-                                .desired_width(available));
+                                .hint_text("Напиши повідомлення друзям…")
+                                .desired_width(width)
+                                .margin(egui::Margin::symmetric(10.0,8.0)));
                         if response.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)){
                             self.send_chat();
                         }
-                        if icon_button(ui,"Надіслати повідомлення",Glyph::Send,
-                            self.mesh.is_some(),false,false,35.0){
+                        if icon_button(ui,"Надіслати",Glyph::Send,self.mesh.is_some(),
+                            false,false,38.0){
                             self.send_chat();
                         }
                     });
                 });
-            ui.add_space(8.0);
+            ui.add_space(10.0);
+
             egui::Frame::none()
-                .fill(Color32::from_rgb(22,27,45))
-                .stroke(Stroke::new(1.0,BORDER))
-                .rounding(Rounding::same(14.0))
-                .inner_margin(egui::Margin::symmetric(12.0,8.0))
+                .fill(Color32::from_rgb(28, 33, 56))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(62, 73, 105)))
+                .rounding(Rounding::same(17.0))
+                .inner_margin(egui::Margin::symmetric(12.0,11.0))
                 .show(ui,|ui|{
                     ui.horizontal(|ui|{
+                        ui.spacing_mut().item_spacing.x=7.0;
+                        // Compact call state makes the toolbar usable at 1050px widths.
                         ui.vertical(|ui|{
-                            ui.label(RichText::new("P2P-з'єднання").strong().size(12.0).color(GREEN));
-                            ui.label(text_caption(format!("Напряму · {} друзів",self.peers.len())));
+                            ui.horizontal(|ui|{
+                                dot(ui,if self.voice.is_some(){GREEN}else{BLUE},3.0);
+                                ui.label(RichText::new(if self.voice.is_some(){
+                                    "У голосі"
+                                }else{"P2P готовий"}).strong().size(11.0)
+                                    .color(if self.voice.is_some(){GREEN}else{BLUE}));
+                            });
+                            ui.label(RichText::new(format!("{} друзів",self.peers.len()))
+                                .size(10.2).color(MUTED));
                         });
-                        ui.add_space(7.0);
-                        ui.separator();
+                        ui.add_space(4.0);
                         let voice=self.voice.is_some();
                         let mic=self.mic_enabled.load(Ordering::Relaxed);
                         let deaf=self.deafened.load(Ordering::Relaxed);
-                        if icon_button(ui,"Мікрофон · Ctrl+M",Glyph::Mic,
-                            voice,mic && voice,false,42.0){
+                        if icon_button(ui,if mic{"Вимкнути мікрофон · Ctrl+M"}
+                            else{"Увімкнути мікрофон · Ctrl+M"},
+                            Glyph::Mic,voice,mic && voice,!mic && voice,40.0) {
                             self.mic_enabled.store(!mic,Ordering::Relaxed);
                         }
-                        if icon_button(ui,"Вимкнути / увімкнути звук",Glyph::Headphones,
-                            voice,deaf && voice,false,42.0){
+                        if icon_button(ui,if deaf{"Увімкнути звук"}else{"Вимкнути звук"},
+                            Glyph::Headphones,voice,false,deaf && voice,40.0) {
                             self.deafened.store(!deaf,Ordering::Relaxed);
                         }
-                        let webcam=self.video.as_ref().is_some_and(|v|v.enabled());
-                        if icon_button(ui,"Камера (P2P beta)",Glyph::Camera,
-                            self.video.is_some(),webcam,false,42.0){
+                        let camera=self.video.as_ref().is_some_and(|v|v.enabled());
+                        if icon_button(ui,if camera{"Вимкнути камеру"}else{"Увімкнути камеру"},
+                            Glyph::Camera,self.video.is_some(),camera,false,40.0){
                             self.toggle_camera();
                         }
-                        icon_button(ui,"Демонстрація екрана — ще в розробці",Glyph::Monitor,false,false,false,42.0);
-                        if icon_button(ui,"Налаштування",Glyph::Settings,true,self.settings_open,false,42.0){
-                            self.settings_open=!self.settings_open;
-                        }
+                        icon_button(ui,"Демонстрація екрана ще недоступна",
+                            Glyph::Monitor,false,false,false,40.0);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            if voice{
-                                if icon_button(ui,"Вийти з голосового каналу",Glyph::Power,true,false,true,42.0){
+                            if voice {
+                                if ui.add(egui::Button::new(
+                                    RichText::new("Вийти").strong().color(BRIGHT).size(12.5))
+                                    .fill(Color32::from_rgb(147,47,73))
+                                    .rounding(Rounding::same(11.0))
+                                    .min_size(Vec2::new(82.0,40.0))).clicked(){
                                     self.toggle_voice();
                                 }
-                                ui.label(RichText::new("Вийти з голосу").size(11.0).color(SOFT));
                             }else{
                                 if ui.add_enabled(self.mesh.is_some(),
-                                    egui::Button::new(RichText::new("Увійти в голос").strong().color(BRIGHT))
-                                    .fill(PURPLE).rounding(Rounding::same(9.0))
-                                    .min_size(Vec2::new(117.0,40.0))).clicked(){
+                                    egui::Button::new(
+                                        RichText::new("Увійти в голос").strong()
+                                            .color(BRIGHT).size(12.0))
+                                    .fill(PURPLE).rounding(Rounding::same(11.0))
+                                    .min_size(Vec2::new(113.0,40.0))).clicked(){
                                     self.toggle_voice();
                                 }
                             }
