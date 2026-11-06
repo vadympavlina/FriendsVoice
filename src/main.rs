@@ -79,7 +79,15 @@ fn save_settings(settings: &Settings) {
         if fs::create_dir_all(parent).is_err() { return; }
     }
     if let Ok(json) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(path, json);
+        // A crash during write should not destroy the user's last known settings.
+        // A same-directory temporary file allows an atomic rename on Windows.
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, &json).is_ok() {
+            if fs::rename(&tmp, &path).is_err() {
+                let _ = fs::write(&path, json);
+                let _ = fs::remove_file(&tmp);
+            }
+        }
     }
 }
 
@@ -290,6 +298,10 @@ impl FriendsApp {
         match self.video.as_mut() {
             Some(video) if video.enabled() => {
                 video.disable();
+                if let Some(mesh) = &self.mesh {
+                    self.video_textures.remove(&mesh.id);
+                    self.video_seen.remove(&mesh.id);
+                }
                 self.notice("Камеру вимкнено.");
             }
             Some(video) => {
@@ -323,32 +335,38 @@ impl FriendsApp {
     fn poll_video(&mut self, ctx: &egui::Context) {
         let Some(video) = self.video.as_mut() else { return; };
         let events = video.poll_events();
+        let camera_on = video.enabled();
+        let local_id = self.mesh.as_ref().map(|mesh| mesh.id);
+        // A burst can contain several queued frames per user. Upload only the
+        // latest frame to the GPU once per UI tick rather than all old frames.
+        let mut latest = HashMap::new();
         for event in events {
             match event {
                 VideoEvent::Frame(frame) => {
-                    let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
-                    if let Some(texture) = self.video_textures.get_mut(&frame.sender_id) {
-                        texture.set(image, egui::TextureOptions::LINEAR);
-                    } else {
-                        let texture = ctx.load_texture(
-                            format!("friends-camera-{}", frame.sender_id),
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        self.video_textures.insert(frame.sender_id, texture);
+                    if Some(frame.sender_id) == local_id && !camera_on {
+                        continue; // discard queued previews after switching camera off
                     }
-                    self.video_seen.insert(frame.sender_id, Instant::now());
+                    latest.insert(frame.sender_id, frame);
                 }
-                VideoEvent::Error(msg) => self.notice(msg),
+                VideoEvent::Error(message) => self.notice(message),
             }
         }
-        // Keeping only live frames prevents showing someone else's old webcam
-        // footage after they turn their camera off.
-        let active: Vec<u64> = self.video_seen.iter()
-            .filter(|(_, t)| t.elapsed() < Duration::from_secs(2))
-            .map(|(id, _)| *id).collect();
-        self.video_seen.retain(|id, _| active.contains(id));
-        self.video_textures.retain(|id, _| active.contains(id));
+        for frame in latest.into_values() {
+            let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
+            if let Some(texture) = self.video_textures.get_mut(&frame.sender_id) {
+                texture.set(image, egui::TextureOptions::LINEAR);
+            } else {
+                let texture = ctx.load_texture(
+                    format!("friends-camera-{}", frame.sender_id),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.video_textures.insert(frame.sender_id, texture);
+            }
+            self.video_seen.insert(frame.sender_id, Instant::now());
+        }
+        self.video_seen.retain(|_, time| time.elapsed() < Duration::from_secs(2));
+        self.video_textures.retain(|id, _| self.video_seen.contains_key(id));
     }
 
 }
@@ -401,7 +419,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([1060.0, 660.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.7 — Clear Voice", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.8 — Stability", options, Box::new(|cc| {
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;
