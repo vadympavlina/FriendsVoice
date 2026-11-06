@@ -653,6 +653,9 @@ impl FriendsApp {
                             ui.label(text_caption(format!("Кадрів: надіслано {} · отримано {}",
                                 video.frames_sent.load(Ordering::Relaxed),
                                 video.frames_received.load(Ordering::Relaxed))));
+                            ui.label(RichText::new(format!("Відновлено після втрати UDP: {}",
+                                video.frames_recovered.load(Ordering::Relaxed)))
+                                .size(11.0).color(GREEN));
                         }
                     });
                     ui.add_space(9.0);
