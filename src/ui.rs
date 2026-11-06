@@ -254,6 +254,28 @@ fn peer_color(idx: usize) -> Color32 {
     [PURPLE, BLUE, Color32::from_rgb(248,139,193),GREEN,
         Color32::from_rgb(247,184,98)][idx%5]
 }
+fn gallery_columns(width: f32) -> usize {
+    if width >= 805.0 {3} else if width >= 370.0 {2} else {1}
+}
+fn gallery_count(connected: usize, columns: usize, focus: bool) -> usize {
+    let visible=connected.saturating_add(1).min(MAX_NODES);
+    if focus {visible} else {visible.max(columns).min(MAX_NODES)}
+}
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn gallery_adapts_to_small_and_wide_windows() {
+        assert_eq!(gallery_columns(369.0),1);
+        assert_eq!(gallery_columns(370.0),2);
+        assert_eq!(gallery_columns(804.0),2);
+        assert_eq!(gallery_columns(805.0),3);
+        assert_eq!(gallery_count(0,3,false),3);
+        assert_eq!(gallery_count(0,3,true),1);
+        assert_eq!(gallery_count(4,3,false),5);
+        assert_eq!(gallery_count(9,3,true),5);
+    }
+}
 fn bubble_chat(ui: &mut Ui, msg: &ChatEntry, mine: bool) {
     if msg.system {
         egui::Frame::none()
@@ -393,8 +415,15 @@ fn peer_tile(
             FontId::proportional(10.0),MUTED);
     }
 
+    let speaking_glow=ui.ctx().animate_bool(
+        egui::Id::new(("fv_voice_highlight",name)),speaking);
+    if speaking_glow > 0.01 {
+        p.rect_stroke(r.shrink(1.0),rounded,
+            Stroke::new(2.6*speaking_glow,
+                GREEN.linear_multiply(speaking_glow*0.55)));
+    }
     p.rect_stroke(r,rounded,
-        Stroke::new(if speaking {2.3} else if response.hovered() {1.6}else{1.0},
+        Stroke::new(if speaking {2.0} else if response.hovered() {1.6}else{1.0},
             if speaking {GREEN} else if response.hovered() {color}else{BORDER}));
 }
 
@@ -581,7 +610,7 @@ impl FriendsApp {
                     self.add_friend();
                 }
                 ui.add_space(18.0);
-                ui.label(RichText::new("FRIENDS VOICE 0.9  ·  DESKTOP")
+                ui.label(RichText::new("FRIENDS VOICE 1.0  ·  AURORA STUDIO")
                     .size(10.1).color(MUTED));
                 ui.add_space(14.0);
             });
@@ -886,7 +915,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.9 · Aurora UI"));
+                    ui.label(text_title("Версія 1.0 · Aurora Studio"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
@@ -1077,12 +1106,9 @@ impl FriendsApp {
             // Responsive gallery: 3 columns on spacious desktops, 2 or 1 on
             // compact windows. It scrolls independently so chat stays usable.
             let gallery_width=ui.available_width().max(140.0);
-            let columns=if gallery_width>=805.0 {3usize}
-                else if gallery_width>=370.0 {2usize} else {1usize};
+            let columns=gallery_columns(gallery_width);
             let gap=11.0;
-            let visible=self.peers.len().saturating_add(1).min(MAX_NODES);
-            let total=if self.focus_mode {visible}
-                else {visible.max(if columns>1{columns}else{1})}.min(MAX_NODES);
+            let total=gallery_count(self.peers.len(),columns,self.focus_mode);
             let rows=total.div_ceil(columns);
             let regular_tile_width=((gallery_width-gap*(columns-1) as f32)
                 /columns as f32).max(110.0);
