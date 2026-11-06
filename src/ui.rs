@@ -476,6 +476,28 @@ impl FriendsApp {
                     ).unwrap_or(0.0).clamp(0.0,1.0);
                     meter(ui,(rms*7.0).min(1.0),19,ui.available_width()-5.0);
                     ui.add_space(8.0);
+                    if let Some(voice) = &self.voice {
+                        let active = self.mesh.as_ref()
+                            .and_then(|mesh| mesh.voice_targets.lock().ok().map(|v| v.len()))
+                            .unwrap_or(0);
+                        ui.label(RichText::new("ДІАГНОСТИКА ГОЛОСУ").size(11.0).strong().color(SOFT));
+                        ui.label(text_caption(format!("Друзів у голосі: {active}")));
+                        ui.label(text_caption(format!(
+                            "UDP пакети: відправлено {} · отримано {}",
+                            voice.packets_sent.load(Ordering::Relaxed),
+                            voice.packets_received.load(Ordering::Relaxed)
+                        )));
+                        let errors = voice.udp_errors.load(Ordering::Relaxed);
+                        if errors > 0 {
+                            ui.label(RichText::new(format!("UDP попереджень: {errors}"))
+                                .size(11.0).color(Color32::from_rgb(246, 185, 95)));
+                        }
+                        if active > 0 && voice.packets_sent.load(Ordering::Relaxed) > 100
+                            && voice.packets_received.load(Ordering::Relaxed) == 0 {
+                            ui.label(RichText::new("Немає вхідного аудіо. Перевір UDP 45889 на комп'ютерах друзів.")
+                                .size(11.0).color(RED));
+                        }
+                    }
                     ui.label(text_caption("Після зміни аудіопристрою перезайди у голосовий канал."));
                     ui.add_space(9.0);
                     if tinted_button(ui,"Зберегти налаштування",PURPLE,true,33.0).clicked(){

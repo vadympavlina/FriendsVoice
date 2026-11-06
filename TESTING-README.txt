@@ -1,5 +1,15 @@
-FRIENDS VOICE 0.4 - NEON DESIGN - WINDOWS 10/11 X64
+FRIENDS VOICE 0.4.1 - RELIABLE VOICE + NEON DESIGN - WINDOWS 10/11 X64
 =================================================
+
+VOICE RELIABILITY FIX:
+ - Sends audio ONLY to peers who have joined the voice channel.
+ - Keeps UDP receive thread alive on Windows WSAECONNRESET / 10054.
+ - Waits for old UDP workers before restarting voice, preventing port race.
+ - Settings > Audio shows UDP sent/received packets for connection diagnosis.
+ - Test 3 PCs: one joins voice before others, then others join and leave;
+   everybody still in voice should hear everybody else without rejoining.
+ - If packets sent climb but received stay zero, check inbound UDP 45889
+   on EACH computer through the trusted Radmin VPN adapter.
 
 NEW DESIGN:
  - Left: Radmin status, channel, friends, find by IP.

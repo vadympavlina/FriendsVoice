@@ -118,7 +118,10 @@ fn refresh(
 ) {
     let mut list = peers.values().map(|p| p.view.clone()).collect::<Vec<_>>();
     list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    let mut ips = list.iter().filter_map(|p| match p.address.ip() {
+    // Only peers who have explicitly joined voice are valid UDP audio endpoints.
+    // Sending packets to users not listening on AUDIO_PORT can trigger Windows
+    // WSAECONNRESET (ICMP Port Unreachable) and cut off receive audio.
+    let mut ips = list.iter().filter(|p| p.voice).filter_map(|p| match p.address.ip() {
         IpAddr::V4(ip) => Some(ip),
         _ => None,
     }).collect::<Vec<_>>();
@@ -322,6 +325,32 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_targets_include_only_peers_in_voice() {
+        let now = Instant::now();
+        let mut nodes = HashMap::new();
+        let active: SocketAddr = "26.10.20.30:45888".parse().unwrap();
+        let inactive: SocketAddr = "26.10.20.31:45888".parse().unwrap();
+        for (id, address, speaking) in [(10, active, true), (11, inactive, false)] {
+            nodes.insert(address, ActivePeer {
+                view: PeerView {
+                    id, name: id.to_string(), address, voice: speaking
+                },
+                last_seen: now,
+            });
+        }
+        let (tx, _) = mpsc::channel();
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        refresh(&nodes, &tx, &targets);
+        assert_eq!(*targets.lock().unwrap(), vec!["26.10.20.30".parse::<Ipv4Addr>().unwrap()]);
+        nodes.get_mut(&inactive).unwrap().view.voice = true;
+        refresh(&nodes, &tx, &targets);
+        assert_eq!(targets.lock().unwrap().len(), 2);
+        nodes.get_mut(&active).unwrap().view.voice = false;
+        refresh(&nodes, &tx, &targets);
+        assert_eq!(*targets.lock().unwrap(), vec!["26.10.20.31".parse::<Ipv4Addr>().unwrap()]);
+    }
 
     #[test]
     fn addr_rule() {

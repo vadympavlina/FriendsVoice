@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -55,13 +55,30 @@ pub struct VoiceSession {
     _input: Stream,
     _output: Stream,
     stop: Arc<AtomicBool>,
+    send_worker: Option<thread::JoinHandle<()>>,
+    receive_worker: Option<thread::JoinHandle<()>>,
     pub microphone_level: Arc<AtomicU32>,
+    pub packets_sent: Arc<AtomicU64>,
+    pub packets_received: Arc<AtomicU64>,
+    pub udp_errors: Arc<AtomicU64>,
 }
 
 impl Drop for VoiceSession {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Workers must finish before reopening UDP 45889 in a new voice session.
+        // The receive socket has a short timeout and will exit within ~200 ms.
+        if let Some(handle) = self.send_worker.take() { let _ = handle.join(); }
+        if let Some(handle) = self.receive_worker.take() { let _ = handle.join(); }
     }
+}
+
+fn recoverable_udp_receive_error(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.kind() == std::io::ErrorKind::TimedOut
+        || error.kind() == std::io::ErrorKind::Interrupted
+        // Windows reports ICMP Port Unreachable following UDP send as 10054.
+        || error.raw_os_error() == Some(10054)
 }
 
 pub fn list_input_devices() -> Vec<String> {
@@ -151,6 +168,9 @@ impl VoiceSession {
 
         let stop = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0f32.to_bits()));
+        let packets_sent = Arc::new(AtomicU64::new(0));
+        let packets_received = Arc::new(AtomicU64::new(0));
+        let udp_errors = Arc::new(AtomicU64::new(0));
         let samples = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let playback = Arc::new(Mutex::new(HashMap::<u64, SpeakerBuffer>::new()));
 
@@ -212,7 +232,8 @@ impl VoiceSession {
         let mic = Arc::clone(&mic_enabled);
         let send_peers = Arc::clone(&peers);
         let stop_send = Arc::clone(&stop);
-        thread::spawn(move || {
+        let sent_count = Arc::clone(&packets_sent);
+        let send_worker = thread::spawn(move || {
             let Ok(mut encoder) = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip) else {
                 eprintln!("Opus encoder startup failed");
                 return;
@@ -245,7 +266,9 @@ impl VoiceSession {
                     let destinations = send_peers.lock().map(|p| p.clone()).unwrap_or_default();
                     for ip in destinations {
                         let addr = SocketAddr::V4(SocketAddrV4::new(ip, AUDIO_PORT));
-                        let _ = socket.send_to(&packet, addr);
+                        if socket.send_to(&packet, addr).is_ok() {
+                            sent_count.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
@@ -253,7 +276,9 @@ impl VoiceSession {
 
         let recv_peers = Arc::clone(&peers);
         let stop_recv = Arc::clone(&stop);
-        thread::spawn(move || {
+        let receive_count = Arc::clone(&packets_received);
+        let error_count = Arc::clone(&udp_errors);
+        let receive_worker = thread::spawn(move || {
             let mut decoders: HashMap<u64, Decoder> = HashMap::new();
             let mut input = [0u8; 1500];
             let mut decoded = [0f32; 5760];
@@ -277,13 +302,23 @@ impl VoiceSession {
                         if let Ok(samples) = decoder.decode_float(&input[8..n], &mut decoded, false) {
                             if let Ok(mut speakers) = playback.lock() {
                                 speakers.entry(id).or_default().add(&decoded[..samples]);
+                                receive_count.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                     }
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                        || e.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(_) => break,
+                    Err(e) if recoverable_udp_receive_error(&e) => {
+                        if e.raw_os_error() == Some(10054) {
+                            error_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Err(e) => {
+                        error_count.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("Friends Voice UDP receive error (retrying): {e}");
+                        // Do not permanently kill audio reception after a transient network
+                        // failure. This is especially important during Radmin VPN changes.
+                        thread::sleep(Duration::from_millis(80));
+                    },
                 }
             }
         });
@@ -291,7 +326,12 @@ impl VoiceSession {
             _input: input_stream,
             _output: output_stream,
             stop,
+            send_worker: Some(send_worker),
+            receive_worker: Some(receive_worker),
             microphone_level: level,
+            packets_sent,
+            packets_received,
+            udp_errors,
         })
     }
 }
@@ -299,6 +339,12 @@ impl VoiceSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_udp_icmp_reset_is_recoverable() {
+        let error = std::io::Error::from_raw_os_error(10054);
+        assert!(recoverable_udp_receive_error(&error));
+    }
 
     #[test]
     fn opus_roundtrip() {
