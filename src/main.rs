@@ -39,6 +39,8 @@ struct Settings {
     ptt_key: i32,
     camera_index: u32,
     video_quality: u32,
+    noise_gate: bool,
+    gate_threshold: f32,
 }
 
 impl Default for Settings {
@@ -53,6 +55,8 @@ impl Default for Settings {
             ptt_key: voice::PTT_VK,
             camera_index: 0,
             video_quality: 1,
+            noise_gate: false, // Opt-in: never silently clip quiet microphones.
+            gate_threshold: 0.018,
         }
     }
 }
@@ -109,6 +113,8 @@ pub struct FriendsApp {
     mic_enabled: Arc<AtomicBool>,
     push_to_talk: Arc<AtomicBool>,
     ptt_key: Arc<AtomicI32>,
+    noise_gate: Arc<AtomicBool>,
+    gate_threshold: Arc<AtomicU32>,
     camera_index: Arc<AtomicU32>,
     video_quality: Arc<AtomicU32>,
     deafened: Arc<AtomicBool>,
@@ -126,6 +132,8 @@ impl Default for FriendsApp {
         let saved_ptt_key = settings.ptt_key;
         let saved_camera_index = settings.camera_index.min(3);
         let saved_video_quality = settings.video_quality.min(2);
+        let saved_noise_gate = settings.noise_gate;
+        let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
         let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
             Ok(mesh) => (Some(mesh), None),
@@ -151,6 +159,8 @@ impl Default for FriendsApp {
             mic_enabled: Arc::new(AtomicBool::new(true)),
             push_to_talk: Arc::new(AtomicBool::new(saved_ptt)),
             ptt_key: Arc::new(AtomicI32::new(saved_ptt_key)),
+            noise_gate: Arc::new(AtomicBool::new(saved_noise_gate)),
+            gate_threshold: Arc::new(AtomicU32::new(saved_gate_threshold.to_bits())),
             camera_index: Arc::new(AtomicU32::new(saved_camera_index)),
             video_quality: Arc::new(AtomicU32::new(saved_video_quality)),
             deafened: Arc::new(AtomicBool::new(false)),
@@ -255,6 +265,8 @@ impl FriendsApp {
             Arc::clone(&self.mic_enabled),
             Arc::clone(&self.push_to_talk),
             Arc::clone(&self.ptt_key),
+            Arc::clone(&self.noise_gate),
+            Arc::clone(&self.gate_threshold),
             Arc::clone(&self.deafened),
             Arc::clone(&self.volume),
         ) {
@@ -380,7 +392,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([1060.0, 660.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.6 — Quality Edition", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.7 — Clear Voice", options, Box::new(|cc| {
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;
