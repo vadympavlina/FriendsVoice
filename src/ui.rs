@@ -567,6 +567,12 @@ impl FriendsApp {
                             ui.label(RichText::new(format!("UDP попереджень: {errors}"))
                                 .size(11.0).color(Color32::from_rgb(246, 185, 95)));
                         }
+                        ui.label(text_caption(format!(
+                            "Відновлено Opus-кадрів: {} · відкинуто запізнілих: {}",
+                            voice.concealed_frames.load(Ordering::Relaxed),
+                            voice.duplicate_packets.load(Ordering::Relaxed),
+                        )));
+                        ui.label(text_caption("Високі значення означають затримки або втрату пакетів у VPN."));
                         if active > 0 && voice.packets_sent.load(Ordering::Relaxed) > 100
                             && voice.packets_received.load(Ordering::Relaxed) == 0 {
                             ui.label(RichText::new("Немає вхідного аудіо. Перевір UDP 45889 на комп'ютерах друзів.")
