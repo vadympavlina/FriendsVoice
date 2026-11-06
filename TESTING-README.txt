@@ -1,42 +1,45 @@
-FRIENDS VOICE 0.9 - AURORA UI - WINDOWS 10/11 X64
-==================================================
+FRIENDS VOICE 1.0 - AURORA STUDIO - WINDOWS 10/11 X64
+======================================================
 
-VISUAL REDESIGN OF THE NATIVE RUST + EGUI APP.
-NO SEPARATE SERVER. Run friends-voice.exe on every connected PC
-within the SAME TRUSTED PRIVATE Radmin VPN network (up to 5 friends).
+Native Rust desktop P2P voice, chat and webcam for up to 5 friends.
+No server, no web browser, no installer. Radmin VPN required.
+Extract ZIP, run friends-voice.exe on each participating computer.
 
-NEW VISUAL EXPERIENCE
-- Full premium dark "Aurora" desktop theme with purple, cyan, navy.
-- Native drawn brand icon and vector tool buttons.
-- Windows Segoe UI font for improved Cyrillic text when available.
-- New left sidebar with channel, status, peers, Radmin IP and friend finder.
-- Main voice room banner with P2P indicators and responsive gallery.
-- Real webcam tiles: centered crop, live indicator, speaking highlight.
-- Redesigned chat messages and prominent call control dock.
-- Settings panel is resizable and starts closed by default.
-- Video gallery adapts to room widths with 1/2/3 columns.
-- All existing voice, video, chat, PTT and device settings remain wired.
+AURORA STUDIO 1.0
+ - Native redesigned dark UI, Windows fonts and vector window icon.
+ - Ctrl+B toggles friends/sidebar.
+ - Ctrl+E toggles video theatre / focus mode.
+ - Ctrl+F opens live chat search (author + message text).
+ - Esc closes search, settings or theatre.
+ - Ctrl+M toggles microphone in app; F9 toggles mic globally in voice.
+ - Push-to-Talk configurable under Settings > Audio (F8 default).
+ - Focus mode displays large webcam tiles + unread message count.
+ - Compact call controls on narrow desktops; full labels and live mic
+   level on wide desktops.
+ - Local call timer, speaker glows, room status, quick copy of VPN IP.
+ - General settings allow toggling/resetting the new layout.
+ - All P2P voice and webcam transport from 0.8 remains compatible.
 
-HOW TO TEST
-1. All friends close old versions and extract/run the new EXE.
-2. Join one private Radmin VPN network. Verify P2P and friend list.
-3. Keep Windows Firewall UDP 45888, UDP 45889, UDP 45890 allowed for
-   trusted VPN traffic only. Do not forward ports to public Internet.
-4. Join voice, toggle mute/deafen, test F9 and configurable PTT.
-5. Open Settings. Select input/output devices, test audio levels,
-   individual peer volume, video source and quality presets.
-6. Enable a webcam and verify that local/remote video appears inside
-   a card and highlights incoming voice. Disable and re-enable.
-7. Resize the main window and open/close Settings. Verify gallery,
-   chat and call buttons are accessible without overlap.
-8. Test with 1, 2, 3, 4 and 5 participants if available.
-9. One friend exits; remaining users continue talking without server.
+RECOMMENDED VISUAL CHECKLIST
+ 1. Start app at 1060x690, 1366x768 and 1920x1080 where possible.
+ 2. Open and close Settings, then resize the right panel.
+ 3. Hide the left sidebar (Ctrl+B) and show it again.
+ 4. Join the voice channel; test MIC, DEAFEN and CAMERA buttons.
+ 5. Check the timer and local mic audio meter with a real microphone.
+ 6. Switch to theatre (Ctrl+E). Check 1, 2, 3 and 5-user layouts.
+ 7. Send a few messages; search by name or text (Ctrl+F).
+ 8. In theatre, ask a friend to send chat: unread count should grow.
+ 9. Check empty-room invitation and copy Radmin IP button.
+10. Change profile name, select audio devices and PTT key.
+11. Verify UDP voice (45889), discovery (45888), webcam (45890)
+    under trusted private Radmin VPN traffic.
+12. Verify friends can leave and rejoin without ending others' calls.
+13. Try Windows display scaling at 100%, 125% or 150%.
 
-LIMITATIONS
-- Windows tests validate program build and algorithms, not visual
-  appearance on your physical monitor; please share screenshots.
-- Screen sharing is NOT YET implemented: icon intentionally disabled.
-- Video capture is JPEG/UDP Beta; no WebRTC/H.264 yet.
-- No app-level end-to-end encryption or peer verification.
-  Use trusted Radmin VPN only.
-- Voice noise gate is optional; echo cancellation is not implemented.
+IMPORTANT
+ - Webcam is experimental JPEG/UDP. Screen share is NOT implemented.
+ - Echo cancellation and end-to-end encryption are NOT available.
+ - No strong peer identity verification. Only trusted private VPN.
+ - Chat history is in memory and isn't persisted after app close.
+ - Automatic CI tests validate compilation and algorithms, not real
+   Windows webcam/audio performance or appearance on your monitor.

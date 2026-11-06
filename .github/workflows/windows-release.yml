@@ -59,10 +59,10 @@ jobs:
           tag_name: test-${{ github.run_number }}
           name: Friends Voice - Test build ${{ github.run_number }}
           body: |
-            Friends Voice 0.9 Aurora UI (complete native desktop visual redesign) P2P Windows build from ${{ github.sha }}.
+            Friends Voice 1.0 Aurora Studio (theatre mode, chat search, shortcuts, responsive call dock) Windows build from ${{ github.sha }}.
             Download FriendsVoice-Windows-x64.zip (only one EXE). Radmin VPN required.
             Every peer must allow inbound UDP 45888 for chat/discovery, UDP 45889 for voice, UDP 45890 for webcam. Webcam requires Windows desktop-app camera permission.
-            Friends Voice 0.9 retains the 0.8 media wire format. Use 0.8 or later for media communication. Webcam remains experimental; screen sharing is not yet available.
+            Friends Voice 1.0 retains the 0.8 media wire format. Use 0.8 or later for media communication. Camera is still beta; no built-in encryption or screen sharing. Webcam remains experimental; screen sharing is not yet available.
           prerelease: true
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip
