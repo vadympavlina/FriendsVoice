@@ -289,7 +289,10 @@ impl Mesh {
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock ||
                         error.kind() == std::io::ErrorKind::TimedOut ||
-                        error.kind() == std::io::ErrorKind::Interrupted => {}
+                        error.kind() == std::io::ErrorKind::Interrupted ||
+                        // Windows reports ICMP "port unreachable" from a friend who
+                        // just left as a reset on our own socket. It is harmless.
+                        error.kind() == std::io::ErrorKind::ConnectionReset => {}
                     Err(error) => {
                         let _ = event_tx.send(MeshEvent::Notice(format!("UDP: {error}")));
                         thread::sleep(Duration::from_millis(250));

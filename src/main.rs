@@ -8,7 +8,7 @@ mod branding;
 
 use eframe::egui::{self, Color32};
 use mesh::{Mesh, MeshEvent, PeerView};
-use protocol::{CONTROL_PORT, MAX_NODES, PROTOCOL_VERSION};
+use protocol::{CONTROL_PORT, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -21,12 +21,6 @@ use std::{
 use voice::VoiceSession;
 use video::{VideoSession, VideoEvent};
 
-const BACKGROUND: Color32 = Color32::from_rgb(14, 19, 34);
-const SIDEBAR: Color32 = Color32::from_rgb(19, 24, 42);
-const PURPLE: Color32 = Color32::from_rgb(148, 108, 250);
-const MUTED: Color32 = Color32::from_rgb(152, 159, 178);
-const GREEN: Color32 = Color32::from_rgb(69, 216, 166);
-const RED: Color32 = Color32::from_rgb(245, 98, 115);
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -105,6 +99,8 @@ struct ChatEntry {
     name: String,
     text: String,
     system: bool,
+    /// How many identical consecutive system notices were folded into this one.
+    repeat: u32,
 }
 
 pub struct FriendsApp {
@@ -140,6 +136,8 @@ pub struct FriendsApp {
     chat_unread: usize,
     voice_started_at: Option<Instant>,
     last_notice: Option<(String, Instant)>,
+    add_friend_open: bool,
+    ip_copied_at: Option<Instant>,
 }
 
 impl Default for FriendsApp {
@@ -168,6 +166,7 @@ impl Default for FriendsApp {
                 name: String::new(),
                 text: "Friends Voice працює без сервера! Друзі з однієї мережі Radmin VPN можуть знайти одне одного автоматично. Якщо ні — додай IP друга один раз.".into(),
                 system: true,
+                repeat: 1,
             }],
             voice: None,
             video: None,
@@ -193,6 +192,8 @@ impl Default for FriendsApp {
             chat_unread: 0,
             voice_started_at: None,
             last_notice: None,
+            add_friend_open: false,
+            ip_copied_at: None,
         }
     }
 }
@@ -201,7 +202,14 @@ impl FriendsApp {
     fn notice(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.last_notice = Some((text.clone(), Instant::now()));
-        self.messages.push(ChatEntry { name: String::new(), text, system: true });
+        // Fold identical consecutive notices instead of flooding the chat.
+        if let Some(last) = self.messages.last_mut() {
+            if last.system && last.text == text {
+                last.repeat = last.repeat.saturating_add(1);
+                return;
+            }
+        }
+        self.messages.push(ChatEntry { name: String::new(), text, system: true, repeat: 1 });
         if self.messages.len() > 600 { self.messages.remove(0); }
     }
 
@@ -226,7 +234,7 @@ impl FriendsApp {
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
                     if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
-                    self.messages.push(ChatEntry { name, text, system: false });
+                    self.messages.push(ChatEntry { name, text, system: false, repeat: 1 });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
                 MeshEvent::LearnedAddress(address) => self.remember_ip(address),
@@ -444,20 +452,7 @@ impl eframe::App for FriendsApp {
             180
         };
         ctx.request_repaint_after(Duration::from_millis(repaint_ms));
-        if self.sidebar_open {
-            egui::SidePanel::left("sidebar").resizable(false).exact_width(277.0)
-                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
-                .show(ctx, |ui| self.neon_sidebar(ui));
-        }
-        if self.settings_open {
-            egui::SidePanel::right("settings").resizable(true).default_width(305.0)
-                .width_range(275.0..=370.0)
-                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
-                .show(ctx, |ui| self.neon_settings(ui));
-        }
-        egui::CentralPanel::default().frame(
-            egui::Frame::none().fill(BACKGROUND).inner_margin(19.0)
-        ).show(ctx, |ui| self.neon_main(ui));
+        self.render(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -472,39 +467,13 @@ impl eframe::App for FriendsApp {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1500.0, 900.0])
-            .with_min_inner_size([1060.0, 690.0])
+            .with_inner_size([1400.0, 860.0])
+            .with_min_inner_size([960.0, 620.0])
             .with_icon(branding::icon()),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 1.0 — Aurora Studio", options, Box::new(|cc| {
-        // Use the native Windows UI font to ensure crisp Ukrainian text. If a
-        // Windows installation has no Segoe UI, keep egui's built-in fallback.
-        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "windows-ui".to_string(), egui::FontData::from_owned(bytes)
-            );
-            fonts.families.entry(egui::FontFamily::Proportional)
-                .or_default().insert(0,"windows-ui".to_string());
-            cc.egui_ctx.set_fonts(fonts);
-        }
-        let mut visual = egui::Visuals::dark();
-        visual.panel_fill = BACKGROUND;
-        visual.window_fill = BACKGROUND;
-        visual.widgets.inactive.bg_fill = Color32::from_rgb(34, 41, 70);
-        visual.widgets.hovered.bg_fill = Color32::from_rgb(61, 71, 114);
-        visual.widgets.active.bg_fill = Color32::from_rgb(111, 81, 182);
-        visual.selection.bg_fill = PURPLE.linear_multiply(0.45);
-        cc.egui_ctx.set_visuals(visual);
-        cc.egui_ctx.style_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(9.0, 8.0);
-            style.spacing.button_padding = egui::vec2(13.0, 8.0);
-            style.spacing.indent = 13.0;
-            style.visuals.widgets.inactive.rounding = egui::Rounding::same(10.0);
-            style.visuals.widgets.hovered.rounding = egui::Rounding::same(10.0);
-            style.visuals.widgets.active.rounding = egui::Rounding::same(10.0);
-        });
+    eframe::run_native("Friends Voice", options, Box::new(|cc| {
+        ui::install_theme(&cc.egui_ctx);
         Ok(Box::new(FriendsApp::default()))
     }))
 }
