@@ -12,7 +12,7 @@ ONLY ONE EXE; NO SERVER. WINDOWS 10/11 x64. RADMIN VPN REQUIRED.
    for trusted Radmin VPN networks. Never expose publicly.
 5. Everyone clicks "Увійти в голос"; verify all friends hear each other.
 6. "Налаштування -> Аудіо": switch ON "Push-to-Talk (утримувати F8)".
-   Hold F8 to transmit voice EVEN WHEN GAME IS FOCUSED; release to stop.
+   Hold your selected PTT key (F8 by default) EVEN WHEN GAME IS FOCUSED; release to stop.
    F9 toggles mic globally. Ctrl+M toggles when Friends Voice has focus.
 7. In voice click the CAMERA ICON; camera should switch on and local
    video should show on your own tile. Friends see remote video.
@@ -25,6 +25,6 @@ LIMITATIONS
 - Video is BETA: not production-grade video call, no adaptive bitrate.
 - Screen share is NOT YET available (button remains disabled).
 - No app-level end-to-end encryption or identities. TRUSTED VPN ONLY.
-- F8/F9 are currently fixed (cannot rebind). Wear headphones for audio.
+- F9 is fixed; PTT can be changed to F6/F7/F8/F10/F11/F12 or Mouse4/Mouse5. Wear headphones for audio.
 - Camera uses the first Windows camera. Enable Windows desktop-app
   webcam permissions if capture fails.

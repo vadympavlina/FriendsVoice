@@ -8,7 +8,7 @@ use std::{
     collections::{HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -29,7 +29,7 @@ fn key_is_down(vkey: i32) -> bool {
     #[cfg(not(target_os = "windows"))]
     { let _ = vkey; false }
 }
-pub const PTT_VK: i32 = 0x77; // F8
+pub const PTT_VK: i32 = 0x77; // F8 default, user-selectable
 pub const MUTE_VK: i32 = 0x78; // F9
 fn allowed_to_transmit(master_on: bool, push_to_talk: bool, key_down: bool) -> bool {
     master_on && (!push_to_talk || key_down)
@@ -156,6 +156,7 @@ impl VoiceSession {
         output_name: &str,
         mic_enabled: Arc<AtomicBool>,
         push_to_talk: Arc<AtomicBool>,
+        ptt_key: Arc<AtomicI32>,
         deafened: Arc<AtomicBool>,
         volume: Arc<AtomicU32>,
     ) -> Result<Self, String> {
@@ -287,7 +288,7 @@ impl VoiceSession {
                 let should_transmit = allowed_to_transmit(
                     mic.load(Ordering::Relaxed),
                     push_to_talk.load(Ordering::Relaxed),
-                    key_is_down(PTT_VK),
+                    key_is_down(ptt_key.load(Ordering::Relaxed)),
                 );
                 tx_indicator.store(should_transmit, Ordering::Relaxed);
                 // No Opus work or UDP traffic while muted or PTT key is released.

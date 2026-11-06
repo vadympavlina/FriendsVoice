@@ -472,9 +472,33 @@ impl FriendsApp {
                     ui.add_space(8.0);
                     section(ui,"АКТИВАЦІЯ МІКРОФОНА");
                     let mut ptt = self.push_to_talk.load(Ordering::Relaxed);
-                    if ui.checkbox(&mut ptt,"Push-to-Talk (утримувати F8)").changed() {
+                    let hotkey_label = match self.ptt_key.load(Ordering::Relaxed) {
+                        0x05 => "Mouse4", 0x06 => "Mouse5", 0x75 => "F6",
+                        0x76 => "F7", 0x77 => "F8", 0x79 => "F10",
+                        0x7A => "F11", 0x7B => "F12", _ => "F8",
+                    };
+                    if ui.checkbox(&mut ptt,format!("Push-to-Talk ({hotkey_label})")).changed() {
                         self.push_to_talk.store(ptt, Ordering::Relaxed);
                         self.settings.push_to_talk = ptt;
+                        save_settings(&self.settings);
+                    }
+                    ui.add_space(5.0);
+                    ui.label(text_caption("Клавіша активації:"));
+                    let mut key = self.ptt_key.load(Ordering::Relaxed);
+                    egui::ComboBox::from_id_salt("fv_ptt_key")
+                        .selected_text(hotkey_label)
+                        .show_ui(ui, |ui| {
+                            for (label, vk) in [
+                                ("F6", 0x75), ("F7", 0x76), ("F8", 0x77),
+                                ("F10", 0x79), ("F11", 0x7A), ("F12", 0x7B),
+                                ("Mouse4 (бічна)", 0x05), ("Mouse5 (бічна)", 0x06),
+                            ] {
+                                ui.selectable_value(&mut key, vk, label);
+                            }
+                        });
+                    if key != self.ptt_key.load(Ordering::Relaxed) {
+                        self.ptt_key.store(key, Ordering::Relaxed);
+                        self.settings.ptt_key = key;
                         save_settings(&self.settings);
                     }
                     ui.label(text_caption("F9 — увімкнути/вимкнути мікрофон навіть під час гри."));
@@ -482,7 +506,7 @@ impl FriendsApp {
                     if let Some(voice) = &self.voice {
                         ui.label(RichText::new(if voice.transmitting.load(Ordering::Relaxed) {
                             "● Зараз передаєш голос"
-                        } else if ptt { "○ Натисни й утримуй F8, щоб говорити" } else {
+                        } else if ptt { "○ Утримуй вибрану клавішу, щоб говорити" } else {
                             "○ Передача вимкнена або немає голосового каналу"
                         }).size(11.0).color(if voice.transmitting.load(Ordering::Relaxed){GREEN}else{SOFT}));
                     }

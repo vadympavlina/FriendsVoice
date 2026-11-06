@@ -14,7 +14,7 @@ use std::{
     fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
-    sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc},
+    sync::{atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering}, Arc},
     time::{Duration, Instant},
 };
 use voice::VoiceSession;
@@ -36,6 +36,7 @@ struct Settings {
     output_device: String,
     volume: f32,
     push_to_talk: bool,
+    ptt_key: i32,
 }
 
 impl Default for Settings {
@@ -47,6 +48,7 @@ impl Default for Settings {
             output_device: String::new(),
             volume: 1.0,
             push_to_talk: false,
+            ptt_key: voice::PTT_VK,
         }
     }
 }
@@ -102,6 +104,7 @@ pub struct FriendsApp {
     video_seen: HashMap<u64, Instant>,
     mic_enabled: Arc<AtomicBool>,
     push_to_talk: Arc<AtomicBool>,
+    ptt_key: Arc<AtomicI32>,
     deafened: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
     input_devices: Vec<String>,
@@ -114,6 +117,7 @@ impl Default for FriendsApp {
     fn default() -> Self {
         let settings = load_settings();
         let saved_ptt = settings.push_to_talk;
+        let saved_ptt_key = settings.ptt_key;
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
         let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
             Ok(mesh) => (Some(mesh), None),
@@ -138,6 +142,7 @@ impl Default for FriendsApp {
             video_seen: HashMap::new(),
             mic_enabled: Arc::new(AtomicBool::new(true)),
             push_to_talk: Arc::new(AtomicBool::new(saved_ptt)),
+            ptt_key: Arc::new(AtomicI32::new(saved_ptt_key)),
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
@@ -239,6 +244,7 @@ impl FriendsApp {
             &self.settings.output_device,
             Arc::clone(&self.mic_enabled),
             Arc::clone(&self.push_to_talk),
+            Arc::clone(&self.ptt_key),
             Arc::clone(&self.deafened),
             Arc::clone(&self.volume),
         ) {
