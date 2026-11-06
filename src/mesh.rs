@@ -1,4 +1,4 @@
-use crate::protocol::{MeshPacket, CONTROL_PORT, MAX_NODES};
+use crate::protocol::{MeshPacket, CONTROL_PORT, MAX_NODES, PROTOCOL_VERSION};
 use get_if_addrs::{get_if_addrs, IfAddr};
 use rand::random;
 use std::{
@@ -20,6 +20,7 @@ pub struct PeerView {
     pub name: String,
     pub address: SocketAddr,
     pub voice: bool,
+    pub protocol: u16,
 }
 
 #[derive(Debug)]
@@ -121,7 +122,7 @@ fn refresh(
     // Only peers who have explicitly joined voice are valid UDP audio endpoints.
     // Sending packets to users not listening on AUDIO_PORT can trigger Windows
     // WSAECONNRESET (ICMP Port Unreachable) and cut off receive audio.
-    let mut ips = list.iter().filter(|p| p.voice).filter_map(|p| match p.address.ip() {
+    let mut ips = list.iter().filter(|p| p.voice && p.protocol == PROTOCOL_VERSION).filter_map(|p| match p.address.ip() {
         IpAddr::V4(ip) => Some(ip),
         _ => None,
     }).collect::<Vec<_>>();
@@ -173,7 +174,7 @@ impl Mesh {
                         Command::AddPeer(address) => {
                             if is_valid_address(address) && address.port() != 0 {
                                 seeds.insert(address);
-                                send(&socket, &MeshPacket::Hello { id, name: nickname.clone(), voice: in_voice }, address);
+                                send(&socket, &MeshPacket::Hello { id, name: nickname.clone(), voice: in_voice, protocol: PROTOCOL_VERSION }, address);
                                 let _ = event_tx.send(MeshEvent::Notice(format!("Запрошення надіслано: {}", address.ip())));
                             }
                         }
@@ -198,7 +199,7 @@ impl Mesh {
                     last_hello = Instant::now() - HELLO_INTERVAL;
                 }
                 if last_hello.elapsed() >= HELLO_INTERVAL {
-                    let hello = MeshPacket::Hello { id, name: nickname.clone(), voice: in_voice };
+                    let hello = MeshPacket::Hello { id, name: nickname.clone(), voice: in_voice, protocol: PROTOCOL_VERSION };
                     let destinations = broadcast_targets.iter().copied()
                         .chain(seeds.iter().copied())
                         .chain(peers.keys().copied()).collect::<HashSet<_>>();
@@ -212,7 +213,7 @@ impl Mesh {
                     Ok((n, source)) if n <= MAX_CONTROL_BYTES && is_valid_address(source) => {
                         let Ok(packet) = serde_json::from_slice::<MeshPacket>(&buf[..n]) else { continue; };
                         match packet {
-                            MeshPacket::Hello { id: remote_id, name, voice } => {
+                            MeshPacket::Hello { id: remote_id, name, voice, protocol } => {
                                 if remote_id == id || name.trim().is_empty() || name.chars().count() > 24 {
                                     continue;
                                 }
@@ -220,10 +221,10 @@ impl Mesh {
                                 let new = !peers.contains_key(&source);
                                 if new && peers.len() >= MAX_NODES - 1 { continue; }
                                 let changed = peers.get(&source)
-                                    .map(|peer| peer.view.id != remote_id || peer.view.name != name || peer.view.voice != voice)
+                                    .map(|peer| peer.view.id != remote_id || peer.view.name != name || peer.view.voice != voice || peer.view.protocol != protocol)
                                     .unwrap_or(true);
                                 peers.insert(source, ActivePeer {
-                                    view: PeerView { id: remote_id, name: name.clone(), address: source, voice },
+                                    view: PeerView { id: remote_id, name: name.clone(), address: source, voice, protocol },
                                     last_seen: now,
                                 });
                                 if seeds.insert(source) {
@@ -233,7 +234,9 @@ impl Mesh {
                                     send(&socket, &MeshPacket::Hello {
                                         id, name: nickname.clone(), voice: in_voice,
                                     }, source);
-                                    let _ = event_tx.send(MeshEvent::Notice(format!("{name} у мережі")));
+                                    let _ = event_tx.send(MeshEvent::Notice(if protocol != PROTOCOL_VERSION {
+                                        format!("{name} має несумісну версію Friends Voice — оновіть усі комп'ютери до 0.8.")
+                                    } else { format!("{name} у мережі") }));
                                 }
                                 // Send known addresses so peers can form a full mesh independently.
                                 if new {
@@ -335,7 +338,7 @@ mod tests {
         for (id, address, speaking) in [(10, active, true), (11, inactive, false)] {
             nodes.insert(address, ActivePeer {
                 view: PeerView {
-                    id, name: id.to_string(), address, voice: speaking
+                    id, name: id.to_string(), address, voice: speaking, protocol: PROTOCOL_VERSION
                 },
                 last_seen: now,
             });

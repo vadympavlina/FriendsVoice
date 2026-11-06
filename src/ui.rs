@@ -384,7 +384,9 @@ impl FriendsApp {
                         avatar(ui,&p.name,33.0,peer_color(i+1));
                         ui.vertical(|ui|{
                             ui.label(RichText::new(&p.name).strong().size(12.5));
-                            ui.label(text_caption(if self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)) {
+                            ui.label(text_caption(if p.protocol != PROTOCOL_VERSION {
+                                "Потрібне оновлення 0.8"
+                            } else if self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)) {
                                 "● Говорить зараз"
                             } else if p.voice { "У голосі" } else { "Онлайн" }));
                         });
@@ -690,7 +692,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.7 · Clear Voice"));
+                    ui.label(text_title("Версія 0.8 · Stability"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
@@ -750,7 +752,7 @@ impl FriendsApp {
                 for i in 0..2{
                     if let Some(p)=self.peers.get(i){
                         peer_tile(ui,tile_w,tile_h,&p.name,
-                            if p.voice{"У голосовому каналі"}else{"У мережі"},
+                            if p.protocol != PROTOCOL_VERSION{"Онови до 0.8"}else if p.voice{"У голосовому каналі"}else{"У мережі"},
                             peer_color(i+1),self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)),false,
                             self.video_textures.get(&p.id));
                     }else{
@@ -767,7 +769,7 @@ impl FriendsApp {
                     ui.spacing_mut().item_spacing.x=gap;
                     for (index, peer) in second_row.iter().take(2).enumerate() {
                         peer_tile(ui,secondary_width,115.0,&peer.name,
-                            if peer.voice{"У голосовому каналі"}else{"У мережі"},
+                            if peer.protocol != PROTOCOL_VERSION{"Онови до 0.8"}else if peer.voice{"У голосовому каналі"}else{"У мережі"},
                             peer_color(index+3),self.voice.as_ref().is_some_and(|v|v.is_speaking(peer.id)),false,
                             self.video_textures.get(&peer.id));
                     }

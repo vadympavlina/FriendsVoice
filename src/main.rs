@@ -7,7 +7,7 @@ mod ui;
 
 use eframe::egui::{self, Color32};
 use mesh::{Mesh, MeshEvent, PeerView};
-use protocol::{CONTROL_PORT, MAX_NODES};
+use protocol::{CONTROL_PORT, MAX_NODES, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
