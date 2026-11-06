@@ -257,6 +257,9 @@ fn peer_color(idx: usize) -> Color32 {
 fn gallery_columns(width: f32) -> usize {
     if width >= 805.0 {3} else if width >= 370.0 {2} else {1}
 }
+fn focus_columns(width: f32, connected: usize) -> usize {
+    gallery_columns(width).min(connected.saturating_add(1).max(1))
+}
 fn gallery_count(connected: usize, columns: usize, focus: bool) -> usize {
     let visible=connected.saturating_add(1).min(MAX_NODES);
     if focus {visible} else {visible.max(columns).min(MAX_NODES)}
@@ -274,6 +277,9 @@ mod layout_tests {
         assert_eq!(gallery_count(0,3,true),1);
         assert_eq!(gallery_count(4,3,false),5);
         assert_eq!(gallery_count(9,3,true),5);
+        assert_eq!(focus_columns(1000.0,0),1);
+        assert_eq!(focus_columns(1000.0,1),2);
+        assert_eq!(focus_columns(1000.0,4),3);
     }
 }
 fn bubble_chat(ui: &mut Ui, msg: &ChatEntry, mine: bool) {
@@ -1192,14 +1198,16 @@ impl FriendsApp {
             // Responsive gallery: 3 columns on spacious desktops, 2 or 1 on
             // compact windows. It scrolls independently so chat stays usable.
             let gallery_width=ui.available_width().max(140.0);
-            let columns=gallery_columns(gallery_width);
+            let columns=if self.focus_mode {
+                focus_columns(gallery_width,self.peers.len())
+            }else{gallery_columns(gallery_width)};
             let gap=11.0;
             let total=gallery_count(self.peers.len(),columns,self.focus_mode);
             let rows=total.div_ceil(columns);
             let regular_tile_width=((gallery_width-gap*(columns-1) as f32)
                 /columns as f32).max(110.0);
             let row_height=if self.focus_mode {
-                (regular_tile_width*0.65).clamp(160.0,285.0)
+                (regular_tile_width*0.56).clamp(170.0,350.0)
             } else {
                 (regular_tile_width*0.53).clamp(132.0,197.0)
             };
