@@ -25,7 +25,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Rust tests (mesh, video parity, Opus, noise gate)
+      - name: Run Rust tests (mesh, Opus ordering/PLC, JPEG recovery, sample conversion)
         shell: pwsh
         run: cargo test --release --target x86_64-pc-windows-msvc
 
@@ -59,10 +59,10 @@ jobs:
           tag_name: test-${{ github.run_number }}
           name: Friends Voice - Test build ${{ github.run_number }}
           body: |
-            Friends Voice 0.7 (video loss recovery + opt-in speech gate) P2P Windows build from ${{ github.sha }}.
+            Friends Voice 0.8 (stability, ordering, lower latency, safer video pipeline) P2P Windows build from ${{ github.sha }}.
             Download FriendsVoice-Windows-x64.zip (only one EXE). Radmin VPN required.
             Every peer must allow inbound UDP 45888 for chat/discovery, UDP 45889 for voice, UDP 45890 for webcam. Webcam requires Windows desktop-app camera permission.
-            If auto-discovery doesn't work, add any online friend's Radmin IPv4 once. Webcam remains experimental; screen sharing is not yet available.
+            All friends MUST upgrade to 0.8. Media packets are not compatible with prior versions. Webcam remains experimental; screen sharing is not yet available.
           prerelease: true
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip

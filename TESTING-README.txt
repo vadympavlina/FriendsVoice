@@ -1,39 +1,40 @@
-FRIENDS VOICE 0.7 - CLEAR VOICE + VIDEO PACKET RECOVERY
-==========================================================
+FRIENDS VOICE 0.8 - STABILITY & MEDIA ENGINE - WINDOWS 10/11 X64
+===================================================================
 
-One native Rust .exe, no separate server. For 2-5 friends in the same
-TRUSTED PRIVATE Radmin VPN network (Windows 10/11 x64).
+IMPORTANT: ALL FRIENDS MUST UPGRADE TO VERSION 0.8.
+The voice and video UDP headers have changed and are NOT compatible with
+0.7 or older releases. The client warns about incompatible friends.
+Do not mix old and new .exe files.
 
-NEW IN v0.7
-- Optional noise gate: Settings > Audio > Розумна активація голосом.
-  Use the sensitivity slider if voice starts or ends are cut off.
-  This setting is OFF by default and does not affect Push-to-Talk.
-- JPEG video adds one extra XOR parity packet per multi-part frame to
-  reconstruct a frame after ONE lost UDP fragment.
-- Video modes and per-friend audio sliders from v0.6 remain available.
-- Speaking peer's tile lights up based on actual received voice.
-- Video settings show number of parity-recovered JPEG frames.
-- GUI uses a lower redraw frequency while idle to save CPU/GPU.
-- Added audio noise gate and video parity regression tests.
+NO SERVER. One friends-voice.exe per PC over the same PRIVATE Radmin VPN.
+Up to five connected friends, fully decentralized.
 
-TEST SCENARIO:
-1. Close old Friends Voice programs and extract this release on ALL PCs.
-2. Join the same trusted Radmin VPN network.
-3. If needed, allow inbound UDP 45888 (presence/chat), UDP 45889
-   (Opus audio), UDP 45890 (webcam) for trusted Radmin VPN traffic.
-4. With three peers connected, first test ordinary always-on voice.
-5. Open Settings > Audio, enable optional noise gate, set sensitivity
-   near the left side. Speak loudly, softly and pause between words.
-   If syllables disappear, lower threshold or disable the gate.
-6. Test Push-to-Talk with F8 (or another chosen key) and F9 mute.
-7. Enable at least two cameras; try all three video profiles and
-   verify voice remains stable while video is active.
-8. Have one friend leave and return while the others remain in voice.
+1. Close ALL old instances. Extract and launch this ZIP on EACH PC.
+2. Join the same private Radmin VPN network.
+3. Permit UDP 45888 (discovery and chat), UDP 45889 (voice),
+   UDP 45890 (camera) in Windows Firewall for trusted VPN traffic.
+   Do NOT forward these ports to the public Internet.
+4. Test ordinary voice with two or more friends. All should hear each
+   other on the FIRST voice join. Rejoin several times.
+5. Test two people speaking AT ONCE (soft limiting), mute/deafen, F9,
+   Ctrl+M and optional configurable Push-to-Talk.
+6. Test microphone and headphones on several Windows headsets. The app
+   now supports F32/I16/U16 at 48 kHz when available.
+7. Settings > Audio > diagnostics displays duplicate/late Opus packets
+   and recovered short lost audio frames.
+8. Enable 2–4 cameras and verify that video doesn't stall voice.
+   Change quality preset and device, turn cameras off/on repeatedly.
+9. One friend leaves. The remaining group must keep their call, chat,
+   and webcam feeds without a central host.
+10. For a long call, monitor CPU/GPU usage and test with unstable VPN.
 
-LIMITATIONS:
-- Camera is still experimental JPEG/UDP; one parity fragment recovers
-  ONE lost data packet, not multiple drops or persistent network loss.
-- Screen sharing not implemented yet.
-- No app-level end-to-end encryption or identity verification: private,
-  trusted Radmin VPN only. Never expose the ports to the Internet.
-- Use headphones: automatic echo cancellation not available yet.
+TESTING NOTES
+ - Incoming Opus duplicate/late packets are discarded; up to 2 missing
+   frames may be concealed with PLC.
+ - Video JPEG decoding runs in a bounded worker queue separate from UDP;
+   frame drops under heavy load are preferable to high latency.
+ - App only communicates over Radmin VPN; no central server.
+ - Noise gate is opt-in and NOT an echo cancellation system.
+ - Screen sharing is NOT available yet.
+ - No end-to-end encryption or secure peer authentication inside
+   Friends Voice. ONLY use trusted private Radmin VPN networks.
