@@ -510,6 +510,28 @@ impl FriendsApp {
                             "○ Передача вимкнена або немає голосового каналу"
                         }).size(11.0).color(if voice.transmitting.load(Ordering::Relaxed){GREEN}else{SOFT}));
                     }
+                    ui.add_space(10.0);
+                    section(ui, "ПРИГЛУШЕННЯ ФОНОВОГО ШУМУ");
+                    let mut gate = self.noise_gate.load(Ordering::Relaxed);
+                    if ui.checkbox(&mut gate, "Розумна активація голосом (Beta)").changed() {
+                        self.noise_gate.store(gate, Ordering::Relaxed);
+                        self.settings.noise_gate = gate;
+                        save_settings(&self.settings);
+                    }
+                    if gate {
+                        ui.label(text_caption("Чутливість: ліворуч — тихі звуки, праворуч — тільки гучна мова."));
+                        let mut threshold = f32::from_bits(
+                            self.gate_threshold.load(Ordering::Relaxed)
+                        ).clamp(0.003, 0.08);
+                        if ui.add(egui::Slider::new(&mut threshold, 0.003..=0.08)
+                            .show_value(false)).changed() {
+                            self.gate_threshold.store(threshold.to_bits(), Ordering::Relaxed);
+                            self.settings.gate_threshold = threshold;
+                            save_settings(&self.settings);
+                        }
+                        ui.label(text_caption(format!("Поріг: {:.1}%", threshold * 100.0)));
+                        ui.label(text_caption("У режимі Push-to-Talk голос визначає лише клавіша, незалежно від порогу."));
+                    }
                     ui.add_space(9.0);
                     ui.label(RichText::new("Гучність відтворення").size(12.0).color(BRIGHT));
                     let mut value=f32::from_bits(self.volume.load(Ordering::Relaxed)).clamp(0.0,2.0);
@@ -580,7 +602,7 @@ impl FriendsApp {
                     section(ui,"ВІДЕО ТА ЕКРАН");
                     card().show(ui,|ui|{
                         ui.label(RichText::new("Камера · P2P Beta").strong().color(BRIGHT));
-                        ui.label(RichText::new("Три режими якості. Статичні кадри передаються рідше, щоб берегти трафік.")
+                        ui.label(RichText::new("Три режими якості й відновлення кадру при втраті одного UDP-фрагмента.")
                             .size(12.0).color(SOFT));
                         ui.add_space(8.0);
                         ui.label(RichText::new("Джерело відео").size(12.0).color(BRIGHT));
@@ -663,7 +685,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.6 · Quality Edition"));
+                    ui.label(text_title("Версія 0.7 · Clear Voice"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
