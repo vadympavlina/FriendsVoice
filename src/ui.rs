@@ -1,7 +1,7 @@
 //! Native egui desktop design. Every interactive element is wired to the existing P2P client.
 //! Camera and screen-share controls are visibly unavailable until their codecs exist.
 use super::*;
-use eframe::egui::{self, Align2, FontId, Pos2, Rect, Response, Rounding, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Align2, FontId, Pos2, Rect, Response, RichText, Rounding, Sense, Stroke, Ui, Vec2};
 
 const SURFACE: Color32 = Color32::from_rgb(27, 30, 49);
 const SURFACE_2: Color32 = Color32::from_rgb(34, 38, 62);
