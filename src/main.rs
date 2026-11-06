@@ -361,7 +361,16 @@ impl eframe::App for FriendsApp {
             let mic = self.mic_enabled.load(Ordering::Relaxed);
             self.mic_enabled.store(!mic, Ordering::Relaxed);
         }
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // Lower idle CPU/GPU load, but repaint quickly while in a live call.
+        // No network worker depends on the UI frame rate.
+        let repaint_ms = if self.video.as_ref().is_some_and(|v| v.enabled()) {
+            60
+        } else if self.voice.is_some() {
+            70
+        } else {
+            180
+        };
+        ctx.request_repaint_after(Duration::from_millis(repaint_ms));
         egui::SidePanel::left("sidebar").resizable(false).exact_width(291.0)
             .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
             .show(ctx, |ui| self.neon_sidebar(ui));
