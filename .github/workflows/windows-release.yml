@@ -67,6 +67,27 @@ jobs:
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip
 
+      - name: Publish the Aurora Studio 1.0 milestone preview
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, 'release(v1.0.0)')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          target_commitish: ${{ github.sha }}
+          name: Friends Voice 1.0 — Aurora Studio
+          body: |
+            Friends Voice 1.0 - Aurora Studio visual milestone.
+            Redesigned responsive Windows app with theatre mode, live call dock,
+            chat search, unread messages, keyboard shortcuts and native neon UI.
+            Same P2P media protocol as 0.8, via trusted private Radmin VPN only.
+
+            Camera is still experimental JPEG/UDP.
+            No built-in end-to-end encryption, identity verification,
+            echo cancellation or screen sharing. This is a preview milestone,
+            not a security-audited communication product.
+          prerelease: true
+          make_latest: false
+          files: dist/FriendsVoice-Windows-x64.zip
+
       - name: Publish versioned GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
