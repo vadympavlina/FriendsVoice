@@ -900,37 +900,110 @@ impl FriendsApp {
                 }
                 2=>{
                     section(ui,"ПРОФІЛЬ");
-                    ui.label(RichText::new("Твій нікнейм").size(12.0).color(BRIGHT));
-                    let changed=ui.add(egui::TextEdit::singleline(&mut self.settings.nickname)
-                        .desired_width(ui.available_width())).changed();
-                    if changed{
-                        if self.settings.nickname.chars().count()>24{
-                            self.settings.nickname=self.settings.nickname.chars().take(24).collect();
+                    card().show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            avatar(ui,&self.settings.nickname,43.0,PURPLE);
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new("Твоя особистість").strong()
+                                    .color(BRIGHT).size(13.0));
+                                ui.label(text_caption("Видиме ім'я в кімнаті P2P"));
+                            });
+                        });
+                        ui.add_space(7.0);
+                        let changed=ui.add(egui::TextEdit::singleline(&mut self.settings.nickname)
+                            .desired_width(ui.available_width())).changed();
+                        if changed {
+                            if self.settings.nickname.chars().count()>24 {
+                                self.settings.nickname=self.settings.nickname.chars().take(24).collect();
+                            }
+                            if !self.settings.nickname.trim().is_empty() {
+                                if let Some(mesh)=&self.mesh {
+                                    mesh.rename(self.settings.nickname.clone());
+                                }
+                            }
+                            save_settings(&self.settings);
                         }
-                        if !self.settings.nickname.trim().is_empty(){
-                            if let Some(mesh)=&self.mesh{mesh.rename(self.settings.nickname.clone());}
+                    });
+                    ui.add_space(12.0);
+                    section(ui,"ВИГЛЯД AURORA STUDIO");
+                    card().show(ui,|ui|{
+                        let mut sidebar=self.sidebar_open;
+                        if ui.checkbox(&mut sidebar,"Показувати панель друзів").changed() {
+                            self.sidebar_open=sidebar;
                         }
-                        save_settings(&self.settings);
-                    }
-                    ui.add_space(13.0);
-                    section(ui,"ЗБЕРЕЖЕНІ КОНТАКТИ");
-                    ui.label(text_caption(format!("Відомих IP-адрес: {}",self.settings.known_ips.len())));
-                    ui.label(text_caption("Адреси зберігаються локально, без жодного акаунта."));
-                    ui.add_space(14.0);
+                        let mut focus=self.focus_mode;
+                        if ui.checkbox(&mut focus,"Театральний режим відео").changed() {
+                            self.focus_mode=focus;
+                            if !focus{self.chat_unread=0;}
+                        }
+                        ui.label(text_caption("Театральний режим збільшує відеокартки та приховує чат."));
+                        ui.add_space(8.0);
+                        if outline_button(ui,"Повернути стандартний вигляд") {
+                            self.sidebar_open=true;
+                            self.focus_mode=false;
+                            self.chat_search_open=false;
+                            self.chat_unread=0;
+                            self.chat_search.clear();
+                            self.notice("Стандартний вигляд Aurora відновлено.");
+                        }
+                    });
+                    ui.add_space(12.0);
                     section(ui,"ГАРЯЧІ КЛАВІШІ");
-                    ui.label(RichText::new("Ctrl + M  —  увімкнути / вимкнути мікрофон")
-                        .size(12.0).color(SOFT));
+                    soft_card().show(ui,|ui|{
+                        for (key,action) in [
+                            ("Ctrl + M","Увімкнути / вимкнути мікрофон"),
+                            ("Ctrl + B","Приховати / відкрити друзів"),
+                            ("Ctrl + E","Театральний режим"),
+                            ("Ctrl + F","Пошук повідомлень"),
+                            ("Esc","Закрити пошук / налаштування"),
+                            ("F9","Мікрофон навіть у грі"),
+                        ] {
+                            ui.horizontal(|ui|{
+                                small_chip(ui,key,PURPLE);
+                                ui.label(RichText::new(action).size(11.0).color(SOFT));
+                            });
+                            ui.add_space(3.0);
+                        }
+                        ui.label(text_caption("Клавішу Push-to-Talk можна обрати у вкладці «Аудіо»."));
+                    });
+                    ui.add_space(12.0);
+                    section(ui,"ЗБЕРЕЖЕНІ КОНТАКТИ");
+                    ui.label(text_caption(format!("Збережених IP-адрес: {}",self.settings.known_ips.len())));
+                    ui.label(text_caption("Контакти зберігаються лише на цьому комп'ютері."));
                 }
                 _=>{
-                    section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 1.0 · Aurora Studio"));
-                    ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
-                        .size(12.0).color(SOFT));
-                    ui.add_space(12.0);
-                    ui.label(RichText::new("Без центрального сервера").strong().color(GREEN));
-                    ui.label(text_caption("Голос і повідомлення передаються напряму через Radmin VPN."));
+                    section(ui,"AURORA STUDIO / VERSION 1.0");
+                    card().show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            let (rect,_)=ui.allocate_exact_size(Vec2::splat(49.0),Sense::hover());
+                            ui.painter().rect_filled(rect,Rounding::same(14.0),PURPLE);
+                            glyph(ui,Glyph::Headphones,rect,BRIGHT);
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new("Friends Voice").strong().size(17.0).color(BRIGHT));
+                                ui.label(RichText::new("1.0 · AURORA STUDIO")
+                                    .strong().size(10.2).color(BLUE));
+                            });
+                        });
+                        ui.add_space(7.0);
+                        ui.label(RichText::new("Приватні голосові кімнати для близьких друзів.")
+                            .size(12.0).color(BRIGHT));
+                        ui.horizontal_wrapped(|ui|{
+                            small_chip(ui,"NATIVE WINDOWS",BLUE);
+                            small_chip(ui,"P2P MESH",GREEN);
+                        });
+                    });
+                    ui.add_space(10.0);
+                    section(ui,"МОЖЛИВОСТІ");
+                    ui.label(text_caption("Голос Opus, Push-to-Talk, відео з камери, чат і керування гучністю друзів."));
                     ui.add_space(8.0);
-                    ui.label(text_caption("Використовуй лише довірену приватну мережу: власного наскрізного шифрування ще немає."));
+                    section(ui,"ВАЖЛИВО ПРО БЕЗПЕКУ");
+                    ui.label(text_caption("Спілкування працює через довірену приватну Radmin VPN-мережу. Власного наскрізного шифрування та підтвердження особи друга ще немає."));
+                    ui.add_space(8.0);
+                    section(ui,"СТАТУС ФУНКЦІЙ");
+                    ui.label(text_caption("Камера — Beta (JPEG / UDP). Демонстрація екрана й автоматичне усунення луни ще не реалізовані."));
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Зроблено на Rust + egui для Windows 10/11")
+                        .size(11.0).color(MUTED));
                 }
             }
             ui.add_space(15.0);
