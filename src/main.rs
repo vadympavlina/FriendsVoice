@@ -20,11 +20,11 @@ use std::{
 use voice::VoiceSession;
 use video::{VideoSession, VideoEvent};
 
-const BACKGROUND: Color32 = Color32::from_rgb(19, 21, 37);
-const SIDEBAR: Color32 = Color32::from_rgb(15, 17, 33);
-const PURPLE: Color32 = Color32::from_rgb(139, 93, 255);
+const BACKGROUND: Color32 = Color32::from_rgb(14, 19, 34);
+const SIDEBAR: Color32 = Color32::from_rgb(19, 24, 42);
+const PURPLE: Color32 = Color32::from_rgb(148, 108, 250);
 const MUTED: Color32 = Color32::from_rgb(152, 159, 178);
-const GREEN: Color32 = Color32::from_rgb(65, 214, 160);
+const GREEN: Color32 = Color32::from_rgb(69, 216, 166);
 const RED: Color32 = Color32::from_rgb(245, 98, 115);
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -174,7 +174,7 @@ impl Default for FriendsApp {
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
-            settings_open: true,
+            settings_open: false,
             settings_page: 0,
         }
     }
@@ -389,17 +389,17 @@ impl eframe::App for FriendsApp {
             180
         };
         ctx.request_repaint_after(Duration::from_millis(repaint_ms));
-        egui::SidePanel::left("sidebar").resizable(false).exact_width(291.0)
-            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
+        egui::SidePanel::left("sidebar").resizable(false).exact_width(277.0)
+            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
             .show(ctx, |ui| self.neon_sidebar(ui));
         if self.settings_open {
-            egui::SidePanel::right("settings").resizable(false).default_width(290.0)
-                .width_range(250.0..=330.0)
-                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
+            egui::SidePanel::right("settings").resizable(true).default_width(305.0)
+                .width_range(275.0..=370.0)
+                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
                 .show(ctx, |ui| self.neon_settings(ui));
         }
         egui::CentralPanel::default().frame(
-            egui::Frame::none().fill(BACKGROUND).inner_margin(16.0)
+            egui::Frame::none().fill(BACKGROUND).inner_margin(19.0)
         ).show(ctx, |ui| self.neon_main(ui));
     }
 
@@ -415,25 +415,37 @@ impl eframe::App for FriendsApp {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1520.0, 865.0])
-            .with_min_inner_size([1060.0, 660.0]),
+            .with_inner_size([1500.0, 900.0])
+            .with_min_inner_size([1060.0, 690.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.8 — Stability", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.9 — Aurora", options, Box::new(|cc| {
+        // Use the native Windows UI font to ensure crisp Ukrainian text. If a
+        // Windows installation has no Segoe UI, keep egui's built-in fallback.
+        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "windows-ui".to_string(), egui::FontData::from_owned(bytes)
+            );
+            fonts.families.entry(egui::FontFamily::Proportional)
+                .or_default().insert(0,"windows-ui".to_string());
+            cc.egui_ctx.set_fonts(fonts);
+        }
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;
-        visual.widgets.inactive.bg_fill = Color32::from_rgb(39, 44, 69);
-        visual.widgets.hovered.bg_fill = Color32::from_rgb(67, 69, 108);
-        visual.widgets.active.bg_fill = Color32::from_rgb(88, 79, 171);
+        visual.widgets.inactive.bg_fill = Color32::from_rgb(34, 41, 70);
+        visual.widgets.hovered.bg_fill = Color32::from_rgb(61, 71, 114);
+        visual.widgets.active.bg_fill = Color32::from_rgb(111, 81, 182);
         visual.selection.bg_fill = PURPLE.linear_multiply(0.45);
         cc.egui_ctx.set_visuals(visual);
         cc.egui_ctx.style_mut(|style| {
             style.spacing.item_spacing = egui::vec2(9.0, 8.0);
-            style.spacing.button_padding = egui::vec2(11.0, 7.0);
-            style.visuals.widgets.inactive.rounding = egui::Rounding::same(9.0);
-            style.visuals.widgets.hovered.rounding = egui::Rounding::same(9.0);
-            style.visuals.widgets.active.rounding = egui::Rounding::same(9.0);
+            style.spacing.button_padding = egui::vec2(13.0, 8.0);
+            style.spacing.indent = 13.0;
+            style.visuals.widgets.inactive.rounding = egui::Rounding::same(10.0);
+            style.visuals.widgets.hovered.rounding = egui::Rounding::same(10.0);
+            style.visuals.widgets.active.rounding = egui::Rounding::same(10.0);
         });
         Ok(Box::new(FriendsApp::default()))
     }))
