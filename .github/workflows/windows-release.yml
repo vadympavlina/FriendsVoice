@@ -61,7 +61,7 @@ jobs:
           body: |
             Voice reliability 0.4.1 + Neon UI P2P Windows build from ${{ github.sha }}.
             Download FriendsVoice-Windows-x64.zip (only one EXE). Radmin VPN required.
-            Every peer must allow inbound UDP 45888 for presence/chat and UDP 45889 for voice.
+            Every peer must allow inbound UDP 45888 for chat/discovery, UDP 45889 for voice, UDP 45890 for webcam. Webcam requires Windows desktop-app camera permission.
             If auto-discovery doesn't work, add any online friend's Radmin IPv4 once.
           prerelease: true
           make_latest: false

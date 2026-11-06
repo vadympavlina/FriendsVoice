@@ -1,45 +1,30 @@
-FRIENDS VOICE 0.4.1 - RELIABLE VOICE + NEON DESIGN - WINDOWS 10/11 X64
-=================================================
+FRIENDS VOICE 0.5 - CAMERA BETA + PUSH-TO-TALK
+=============================================
 
-VOICE RELIABILITY FIX:
- - Sends audio ONLY to peers who have joined the voice channel.
- - Keeps UDP receive thread alive on Windows WSAECONNRESET / 10054.
- - Waits for old UDP workers before restarting voice, preventing port race.
- - Settings > Audio shows UDP sent/received packets for connection diagnosis.
- - Test 3 PCs: one joins voice before others, then others join and leave;
-   everybody still in voice should hear everybody else without rejoining.
- - If packets sent climb but received stay zero, check inbound UDP 45889
-   on EACH computer through the trusted Radmin VPN adapter.
+ONLY ONE EXE; NO SERVER. WINDOWS 10/11 x64. RADMIN VPN REQUIRED.
 
-NEW DESIGN:
- - Left: Radmin status, channel, friends, find by IP.
- - Center: real connected participants, chat and bottom voice controls.
- - Right: audio/video/general/about settings tabs.
- - Camera and screen-share buttons are deliberately disabled; not implemented.
+1. Extract ZIP. Close older versions of Friends Voice.
+2. Have every friend open the new friends-voice.exe on the SAME private
+   Radmin VPN network. They should find each other automatically.
+3. If missing: Add any friend's 26.x.x.x address with "Знайти за IP".
+4. Windows Firewall: allow inbound UDP 45888 (discovery/chat), UDP 45889
+   (Opus voice) and UDP 45890 (JPEG webcam) on EACH computer and ONLY
+   for trusted Radmin VPN networks. Never expose publicly.
+5. Everyone clicks "Увійти в голос"; verify all friends hear each other.
+6. "Налаштування -> Аудіо": switch ON "Push-to-Talk (утримувати F8)".
+   Hold F8 to transmit voice EVEN WHEN GAME IS FOCUSED; release to stop.
+   F9 toggles mic globally. Ctrl+M toggles when Friends Voice has focus.
+7. In voice click the CAMERA ICON; camera should switch on and local
+   video should show on your own tile. Friends see remote video.
+   Camera is OFF unless explicitly enabled.
+8. Webcam sends low-bandwidth 320x180 JPEG frames up to 6 FPS on UDP.
+9. Test with 3 PCs, joining voice and camera in different orders.
+   One friend leaves the app; the others must keep their call.
 
-THIS RELEASE NEEDS NO SERVER, NO start-server.cmd, NO PASSWORD.
-Every computer runs ONLY friends-voice.exe.
-
-1. On every computer: connect to the SAME PRIVATE Radmin VPN network.
-2. On every computer: start friends-voice.exe.
-3. Allow inbound UDP port 45888 (discovery/chat) and UDP 45889 (voice)
-   for the trusted Radmin VPN network in Windows Firewall.
-4. Wait until friends appear under "ДРУЗІ В МЕРЕЖІ".
-5. If discovery doesn't find someone, add their Radmin 26.x.x.x IPv4
-   once with "Знайти за IP". The app saves known friend IPs and shares
-   peer addresses to form an independent mesh.
-6. Click "Приєднатися до голосу" only when you want to talk.
-7. Send messages in the chat without joining voice.
-8. Test with THREE PCs: after all are connected, exit the application
-   on one PC. The two remaining peers should keep talking normally.
-
-This is a beta:
- - Voice/chat: implemented. Camera and screen sharing: not implemented.
- - UDP discovery relies on virtual-network broadcast support; manual IP
-   fallback is provided for Radmin networks that do not relay broadcast.
- - The app does not encrypt or authenticate at the application layer.
-   Radmin VPN is the trust boundary. Do NOT use public Radmin networks.
- - The chat is reliable while peers are online, but history is not synced.
- - Up to five computers. Voice uses Opus with default Windows 48 kHz F32 devices.
- - Wear headphones: no echo cancellation yet.
- - If a peer disappears, it can take up to nine seconds to be removed.
+LIMITATIONS
+- Video is BETA: not production-grade video call, no adaptive bitrate.
+- Screen share is NOT YET available (button remains disabled).
+- No app-level end-to-end encryption or identities. TRUSTED VPN ONLY.
+- F8/F9 are currently fixed (cannot rebind). Wear headphones for audio.
+- Camera uses the first Windows camera. Enable Windows desktop-app
+  webcam permissions if capture fails.
