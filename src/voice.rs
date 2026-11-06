@@ -1,4 +1,4 @@
-use crate::protocol::{UDP_VOICE_FROM_SERVER, UDP_VOICE_TO_SERVER, VOICE_PORT_OFFSET};
+use crate::protocol::AUDIO_PORT;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SampleRate, Stream, StreamConfig,
@@ -6,7 +6,7 @@ use cpal::{
 use opus::{Application, Channels, Decoder, Encoder};
 use std::{
     collections::{HashMap, VecDeque},
-    net::{SocketAddr, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
         atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
@@ -114,18 +114,16 @@ fn output_config(device: &cpal::Device) -> Result<StreamConfig, String> {
 
 impl VoiceSession {
     pub fn start(
-        mut server: SocketAddr,
-        token: u128,
+        my_id: u64,
+        peers: Arc<Mutex<Vec<Ipv4Addr>>>,
         input_name: &str,
         output_name: &str,
         mic_enabled: Arc<AtomicBool>,
         deafened: Arc<AtomicBool>,
         volume: Arc<AtomicU32>,
     ) -> Result<Self, String> {
-        server.set_port(server.port().checked_add(VOICE_PORT_OFFSET)
-            .ok_or("Недопустимий порт голосового сервера")?);
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .map_err(|e| format!("Не вдалося відкрити UDP: {e}"))?;
+        let socket = UdpSocket::bind(("0.0.0.0", AUDIO_PORT))
+            .map_err(|e| format!("Не вдалося відкрити голосовий P2P UDP-порт {AUDIO_PORT}: {e}"))?;
         socket.set_read_timeout(Some(Duration::from_millis(200)))
             .map_err(|e| e.to_string())?;
         let receiver = socket.try_clone().map_err(|e| e.to_string())?;
@@ -212,6 +210,7 @@ impl VoiceSession {
         output_stream.play().map_err(|e| format!("Запуск динаміків: {e}"))?;
 
         let mic = Arc::clone(&mic_enabled);
+        let send_peers = Arc::clone(&peers);
         let stop_send = Arc::clone(&stop);
         thread::spawn(move || {
             let Ok(mut encoder) = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip) else {
@@ -240,15 +239,19 @@ impl VoiceSession {
                     pcm.fill(0.0);
                 }
                 if let Ok(n) = encoder.encode_float(&pcm, &mut payload) {
-                    let mut packet = Vec::with_capacity(17 + n);
-                    packet.push(UDP_VOICE_TO_SERVER);
-                    packet.extend_from_slice(&token.to_be_bytes());
+                    let mut packet = Vec::with_capacity(8 + n);
+                    packet.extend_from_slice(&my_id.to_be_bytes());
                     packet.extend_from_slice(&payload[..n]);
-                    let _ = socket.send_to(&packet, server);
+                    let destinations = send_peers.lock().map(|p| p.clone()).unwrap_or_default();
+                    for ip in destinations {
+                        let addr = SocketAddr::V4(SocketAddrV4::new(ip, AUDIO_PORT));
+                        let _ = socket.send_to(&packet, addr);
+                    }
                 }
             }
         });
 
+        let recv_peers = Arc::clone(&peers);
         let stop_recv = Arc::clone(&stop);
         thread::spawn(move || {
             let mut decoders: HashMap<u64, Decoder> = HashMap::new();
@@ -256,16 +259,22 @@ impl VoiceSession {
             let mut decoded = [0f32; 5760];
             while !stop_recv.load(Ordering::Relaxed) {
                 match receiver.recv_from(&mut input) {
-                    Ok((n, addr)) if n > 9 && addr == server && input[0] == UDP_VOICE_FROM_SERVER => {
+                    Ok((n, addr)) if n > 8 && addr.port() == AUDIO_PORT && {
+                        match addr.ip() {
+                            IpAddr::V4(ip) => recv_peers.lock()
+                                .map(|known| known.contains(&ip)).unwrap_or(false),
+                            _ => false,
+                        }
+                    } => {
                         let mut id_bytes = [0u8; 8];
-                        id_bytes.copy_from_slice(&input[1..9]);
+                        id_bytes.copy_from_slice(&input[..8]);
                         let id = u64::from_be_bytes(id_bytes);
                         if let std::collections::hash_map::Entry::Vacant(e) = decoders.entry(id) {
                             let Ok(decoder) = Decoder::new(SAMPLE_RATE, Channels::Mono) else { continue; };
                             e.insert(decoder);
                         }
                         let Some(decoder) = decoders.get_mut(&id) else { continue; };
-                        if let Ok(samples) = decoder.decode_float(&input[9..n], &mut decoded, false) {
+                        if let Ok(samples) = decoder.decode_float(&input[8..n], &mut decoded, false) {
                             if let Ok(mut speakers) = playback.lock() {
                                 speakers.entry(id).or_default().add(&decoded[..samples]);
                             }
