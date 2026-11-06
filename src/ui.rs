@@ -944,11 +944,15 @@ impl FriendsApp {
                     let mut base=0usize;
                     while base<total {
                         let row_count=(total-base).min(columns);
-                        let tile_width=((gallery_width-gap*(row_count-1) as f32)
-                            /row_count as f32).max(110.0);
-                        let tile_height=(tile_width*0.53).clamp(132.0,197.0);
+                        // Keep the same card width in every row. Center a
+                        // partially-filled last row instead of stretching a
+                        // single participant into a panoramic webcam.
+                        let tile_width=regular_tile_width;
+                        let tile_height=row_height;
+                        let offset=(columns-row_count) as f32*(tile_width+gap)*0.5;
                         ui.horizontal(|ui|{
                             ui.spacing_mut().item_spacing.x=gap;
+                            if offset > gap {ui.add_space(offset-gap);}
                             for index in base..(base+row_count) {
                                 if index==0 {
                                     peer_tile(ui,tile_width,tile_height,&self.settings.nickname,
