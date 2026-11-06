@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 /// This is a decentralized mesh. Each client owns its control and voice UDP sockets.
 pub const CONTROL_PORT: u16 = 45888;
 pub const AUDIO_PORT: u16 = 45889;
+pub const VIDEO_PORT: u16 = 45890;
 pub const MAX_NODES: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

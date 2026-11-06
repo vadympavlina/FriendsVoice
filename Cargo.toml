@@ -12,6 +12,8 @@ cpal = "0.15.3"
 opus = "0.4"
 rand = "0.8"
 get_if_addrs = "0.5.3"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+nokhwa = { version = "0.10.11", default-features = false, features = ["input-msmf"] }
 
 [[bin]]
 name = "friends-voice"

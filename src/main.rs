@@ -2,6 +2,7 @@
 mod mesh;
 mod protocol;
 mod voice;
+mod video;
 mod ui;
 
 use eframe::egui::{self, Color32};
@@ -9,13 +10,15 @@ use mesh::{Mesh, MeshEvent, PeerView};
 use protocol::{CONTROL_PORT, MAX_NODES};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
     sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use voice::VoiceSession;
+use video::{VideoSession, VideoEvent};
 
 const BACKGROUND: Color32 = Color32::from_rgb(19, 21, 37);
 const SIDEBAR: Color32 = Color32::from_rgb(15, 17, 33);
@@ -94,6 +97,9 @@ pub struct FriendsApp {
     draft: String,
     messages: Vec<ChatEntry>,
     voice: Option<VoiceSession>,
+    video: Option<VideoSession>,
+    video_textures: HashMap<u64, egui::TextureHandle>,
+    video_seen: HashMap<u64, Instant>,
     mic_enabled: Arc<AtomicBool>,
     push_to_talk: Arc<AtomicBool>,
     deafened: Arc<AtomicBool>,
@@ -107,6 +113,7 @@ pub struct FriendsApp {
 impl Default for FriendsApp {
     fn default() -> Self {
         let settings = load_settings();
+        let saved_ptt = settings.push_to_talk;
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
         let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
             Ok(mesh) => (Some(mesh), None),
@@ -126,8 +133,11 @@ impl Default for FriendsApp {
                 system: true,
             }],
             voice: None,
+            video: None,
+            video_textures: HashMap::new(),
+            video_seen: HashMap::new(),
             mic_enabled: Arc::new(AtomicBool::new(true)),
-            push_to_talk: Arc::new(AtomicBool::new(settings.push_to_talk)),
+            push_to_talk: Arc::new(AtomicBool::new(saved_ptt)),
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
@@ -212,7 +222,11 @@ impl FriendsApp {
     }
 
     fn toggle_voice(&mut self) {
-        if self.voice.take().is_some() {
+        if self.voice.is_some() {
+            self.video.take();
+            self.video_textures.clear();
+            self.video_seen.clear();
+            self.voice.take();
             if let Some(mesh) = &self.mesh { mesh.voice(false); }
             self.notice("Ти вийшов(-ла) з голосового каналу.");
             return;
@@ -231,18 +245,67 @@ impl FriendsApp {
             Ok(voice) => {
                 self.voice = Some(voice);
                 mesh.voice(true);
-                self.notice("Голос підключено напряму до друзів. Можна виходити з каналу незалежно одне від одного.");
+                match VideoSession::start(mesh.id, Arc::clone(&mesh.voice_targets)) {
+                    Ok(video) => self.video = Some(video),
+                    Err(error) => self.notice(format!("Відео недоступне: {error}. Голос працює.")),
+                }
+                self.notice("Голос підключено напряму до друзів. Камеру можна вмикати окремо.");
             }
             Err(error) => self.notice(format!("Не вдалося запустити голос: {error}")),
         }
     }
 
+    fn toggle_camera(&mut self) {
+        match self.video.as_mut() {
+            Some(video) if video.enabled() => {
+                video.disable();
+                self.notice("Камеру вимкнено.");
+            }
+            Some(video) => {
+                video.enable();
+                self.notice("Запуск камери… Windows може запросити дозвіл.");
+            }
+            None => self.notice("Спочатку зайди у голосовий канал."),
+        }
+    }
+
+    fn poll_video(&mut self, ctx: &egui::Context) {
+        let Some(video) = self.video.as_mut() else { return; };
+        let events = video.poll_events();
+        for event in events {
+            match event {
+                VideoEvent::Frame(frame) => {
+                    let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
+                    if let Some(texture) = self.video_textures.get_mut(&frame.sender_id) {
+                        texture.set(image, egui::TextureOptions::LINEAR);
+                    } else {
+                        let texture = ctx.load_texture(
+                            format!("friends-camera-{}", frame.sender_id),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.video_textures.insert(frame.sender_id, texture);
+                    }
+                    self.video_seen.insert(frame.sender_id, Instant::now());
+                }
+                VideoEvent::Error(msg) => self.notice(msg),
+            }
+        }
+        // Keeping only live frames prevents showing someone else's old webcam
+        // footage after they turn their camera off.
+        let active: Vec<u64> = self.video_seen.iter()
+            .filter(|(_, t)| t.elapsed() < Duration::from_secs(2))
+            .map(|(id, _)| *id).collect();
+        self.video_seen.retain(|id, _| active.contains(id));
+        self.video_textures.retain(|id, _| active.contains(id));
+    }
 
 }
 
 impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_events();
+        self.poll_video(ctx);
         if self.voice.is_some() && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::M)) {
             let mic = self.mic_enabled.load(Ordering::Relaxed);
             self.mic_enabled.store(!mic, Ordering::Relaxed);
@@ -263,6 +326,7 @@ impl eframe::App for FriendsApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.video.take();
         self.voice.take();
         self.mesh.take();
         self.settings.volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
@@ -277,7 +341,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([1060.0, 660.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.4 — Neon P2P", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 0.5 — Camera & PTT", options, Box::new(|cc| {
         let mut visual = egui::Visuals::dark();
         visual.panel_fill = BACKGROUND;
         visual.window_fill = BACKGROUND;

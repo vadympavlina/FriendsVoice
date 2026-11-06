@@ -10,7 +10,6 @@ use nokhwa::{
 };
 use std::{
     collections::HashMap,
-    io::Cursor,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -139,8 +138,7 @@ fn webcam_loop(
             Ok(frame) => frame,
             Err(error) => {
                 let _ = events.try_send(VideoEvent::Error(format!("Помилка кадру з камери: {error}")));
-                thread::sleep(Duration::from_millis(150));
-                continue;
+                break;
             }
         };
         if !active.load(Ordering::Relaxed) { break; }
