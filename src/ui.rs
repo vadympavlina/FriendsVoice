@@ -675,8 +675,20 @@ impl FriendsApp {
                     }
                 }
             });
-            if self.peers.len()>2{
-                ui.label(text_caption(format!("Ще {} друзів у мережі — дивись список зліва.",self.peers.len()-2)));
+            // Up to five real participants, with responsive second row.
+            if self.peers.len()>2 {
+                ui.add_space(8.0);
+                let second_row = &self.peers[2..];
+                let secondary_width=((content_w-gap)/2.0).max(95.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x=gap;
+                    for (index, peer) in second_row.iter().take(2).enumerate() {
+                        peer_tile(ui,secondary_width,115.0,&peer.name,
+                            if peer.voice{"У голосовому каналі"}else{"У мережі"},
+                            peer_color(index+3),peer.voice,false,
+                            self.video_textures.get(&peer.id));
+                    }
+                });
             }
             ui.add_space(11.0);
             // The chat flexes vertically; the footer remains visible.
