@@ -2,7 +2,7 @@ name: Friends Voice Windows builds
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'dev/**']
     tags: ['v*']
   workflow_dispatch:
 
@@ -24,6 +24,10 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Run Rust unit and integration tests
+        shell: pwsh
+        run: cargo test --release --target x86_64-pc-windows-msvc
 
       - name: Compile native Windows apps
         shell: pwsh
@@ -62,7 +66,7 @@ jobs:
           name: Friends Voice - Test build ${{ github.run_number }}
           body: |
             Automated Windows test build from commit ${{ github.sha }}.
-            Download FriendsVoice-Windows-x64.zip. Prototype: text chat only.
+            Download FriendsVoice-Windows-x64.zip. Voice requires TCP 45888 and UDP 45889.
           prerelease: true
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip

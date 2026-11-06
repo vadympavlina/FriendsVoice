@@ -1,38 +1,47 @@
-# Friends Voice
+# Friends Voice 0.2 — приватний Discord для друзів
 
-A private, native **Rust** application for Windows 10/11 and up to **5 friends**, using **Radmin VPN** for connectivity. No Electron.
+Native Windows 10/11 desktop app in **Rust**, with **Radmin VPN**, max **five friends**. No Electron, no public server, no hosting bill.
 
-## Download a Windows release
+## Download
 
-Open **[Releases](https://github.com/vadympavlina/FriendsVoice/releases)** and download `FriendsVoice-Windows-x64.zip` from the latest successful test build. Extract it, launch `start-server.cmd` on the host PC and `friends-voice.exe` on each participant's computer.
+Open [GitHub Releases](https://github.com/vadympavlina/FriendsVoice/releases). Download **FriendsVoice-Windows-x64.zip** from the newest successful test release; extract and run the included executables. You do **not** need Rust, Visual Studio, Cargo or a local compiler.
 
-**The app is not compiled on the user's PC.** GitHub Actions builds both Windows executables on hosted Windows runners.
+## Main features
 
-## Radmin VPN setup
+- Modern dark UI on `egui`.
+- Native voice chat: capture/playback via WASAPI (`cpal`) and compressed Opus audio (48 kHz mono, 20 ms frames).
+- Private voice relay over UDP, with random 128-bit credentials minted after the TCP room login. Up to **five** connected friends.
+- Mute / deafen and Ctrl+M shortcut, microphone input meter, volume control and selectable audio devices.
+- Text chat, connection status, online participants and an access password.
+- Remembers host, nickname and device settings in `%APPDATA%/FriendsVoice/settings.json`, **never** the room password.
+- Automatic Windows x64 builds, unit / integration tests and releases.
 
-1. Join the same private Radmin VPN network on each PC.
-2. On one PC, run `start-server.cmd` and set a room password of at least eight characters.
-3. Find that host's IPv4 address in Radmin VPN (usually `26.x.x.x`).
-4. On other PCs, launch `friends-voice.exe`, enter `26.x.x.x:45888`, a unique nickname, and the room password.
-5. If necessary, allow inbound **TCP port 45888** in Windows Firewall for the trusted VPN only; do not forward the port from a public router.
-6. To test on one computer, use `127.0.0.1:45888`.
+## Get started
 
-## Current features (v0.1)
+1. All friends join the same Radmin VPN private network.
+2. On one PC, run `start-server.cmd`, set a unique room password (8+ characters), and keep the server console open.
+3. Allow **inbound TCP 45888 and UDP 45889** in Windows Firewall on the host for the trusted VPN network. Do not forward public router ports.
+4. Run `friends-voice.exe` on all PCs. Enter host's Radmin VPN IPv4 such as `26.x.x.x:45888`, a unique nickname and room password.
+5. Click **Підключитися**, then **Приєднатися до голосу**. Wear headphones to prevent feedback. Test mute/deafen and the chat.
+6. To test without Radmin VPN, use `127.0.0.1:45888` on the host computer.
 
-- Native dark interface using `eframe`/`egui`.
-- Windows client and server.
-- Chat, nickname + room password, online members, maximum 5 users.
-- Automatic Windows x64 build, server smoke-test and GitHub prerelease on pushes to `main`.
+## Requirements and limits
 
-**Not yet implemented:** voice, video, screensharing, app-level encryption. This experimental prototype transfers room password and messages in plaintext inside the private VPN. Only use it with trusted friends. Do not reuse important passwords.
+- Windows 10 or 11, audio hardware with **48 kHz F32 support**.
+- Everyone must be online in Radmin VPN.
+- One host PC acts as server; if it shuts down, the room closes.
+- Basic voice jitter buffering; behavior depends on your network and devices.
+- No webcam, screensharing, system-audio streaming, AEC or automatic noise cancellation yet.
+- The app protocol is **not end-to-end encrypted**. Radmin VPN transports the traffic over its tunnel, but this prototype assumes a trusted private network. Don't reuse important passwords.
 
-## For developers (not needed to test)
+## Development
 
 ```powershell
+cargo test --release --target x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 ./scripts/smoke-test.ps1
 ```
 
-Workflow: `.github/workflows/windows-release.yml`. Every successful push to `main` publishes a new prerelease; tagged commits beginning with `v` produce versioned releases.
+GitHub Actions compiles the Windows release and validates TCP handshake, group messages, Opus codec and authenticated UDP relay. Use [Actions](https://github.com/vadympavlina/FriendsVoice/actions) to see CI.
 
-Planned milestones: v0.2 voice rooms with Opus; v0.3 camera; v0.4 screen share; v0.5 hardening and encryption.
+Planned: v0.3 webcam / screen share, then encryption, echo suppression, reconnection, better jitter / packet-loss handling.

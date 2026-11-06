@@ -29,7 +29,7 @@ try {
     $writer.AutoFlush = $true
     $writer.WriteLine('{"type":"hello","nickname":"Tester","password":"smoke-test-password"}')
     $response = $reader.ReadLine() | ConvertFrom-Json
-    if ($response.type -ne 'welcome' -or $response.users -notcontains 'Tester') {
+    if ($response.type -ne 'welcome' -or -not ($response.users.nickname -contains 'Tester')) {
         throw 'Handshake failed: expected a welcome containing Tester'
     }
     $writer.WriteLine('{"type":"send_chat","text":"ping"}')
