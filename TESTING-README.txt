@@ -11,6 +11,9 @@ NEW IN v0.7
 - JPEG video adds one extra XOR parity packet per multi-part frame to
   reconstruct a frame after ONE lost UDP fragment.
 - Video modes and per-friend audio sliders from v0.6 remain available.
+- Speaking peer's tile lights up based on actual received voice.
+- Video settings show number of parity-recovered JPEG frames.
+- GUI uses a lower redraw frequency while idle to save CPU/GPU.
 - Added audio noise gate and video parity regression tests.
 
 TEST SCENARIO:
