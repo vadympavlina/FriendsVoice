@@ -104,7 +104,7 @@ fn decode_jpeg(id: u64, data: &[u8]) -> Option<VideoFrame> {
     Some(VideoFrame { sender_id: id, width: VIDEO_WIDTH as usize, height: VIDEO_HEIGHT as usize, rgb: image.into_raw() })
 }
 fn webcam_loop(
-    stop: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
     id: u64,
     targets: Arc<Mutex<Vec<Ipv4Addr>>>,
     events: SyncSender<VideoEvent>,
@@ -133,7 +133,7 @@ fn webcam_loop(
     };
     let mut seq = 0u32;
     let interval = Duration::from_millis(1000 / VIDEO_FPS);
-    while !stop.load(Ordering::Relaxed) {
+    while active.load(Ordering::Relaxed) {
         let start = Instant::now();
         let frame = match camera.frame() {
             Ok(frame) => frame,
@@ -143,7 +143,7 @@ fn webcam_loop(
                 continue;
             }
         };
-        if stop.load(Ordering::Relaxed) { break; }
+        if !active.load(Ordering::Relaxed) { break; }
         let decoded = match frame.decode_image::<RgbFormat>() {
             Ok(image) => image,
             Err(error) => {
@@ -262,7 +262,7 @@ impl VideoSession {
         let count = Arc::clone(&self.frames_sent);
         // Stop condition is logically inverted; thread runs while active=true.
         self.webcam_worker = Some(thread::spawn(move || {
-            webcam_loop(Arc::new(AtomicBool::new(false)), id, peers, tx, count);
+            webcam_loop(Arc::clone(&stop), id, peers, tx, count);
             stop.store(false, Ordering::Relaxed);
         }));
     }
