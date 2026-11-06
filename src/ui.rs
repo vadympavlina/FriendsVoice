@@ -223,6 +223,21 @@ fn icon_button(ui: &mut Ui, name: &str, icon: Glyph, enabled: bool, selected: bo
     glyph(ui, icon, rect, if !enabled {MUTED.linear_multiply(0.48)} else {BRIGHT});
     enabled && response.clicked()
 }
+fn dock_action(
+    ui: &mut Ui, label: &str, tooltip: &str, icon: Glyph,
+    enabled: bool, selected: bool, danger: bool, compact: bool,
+) -> bool {
+    if compact {
+        return icon_button(ui,tooltip,icon,enabled,selected,danger,38.0);
+    }
+    let mut pressed=false;
+    ui.vertical(|ui|{
+        pressed=icon_button(ui,tooltip,icon,enabled,selected,danger,42.0);
+        ui.label(RichText::new(label).size(10.0).color(if enabled{SOFT}else{MUTED}));
+    });
+    pressed
+}
+
 fn meter(ui: &mut Ui, level: f32, bars: usize, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width,22.0), Sense::hover());
     let step = width / bars as f32;
@@ -898,6 +913,97 @@ impl FriendsApp {
         });
     }
 
+    fn studio_dock(&mut self, ui: &mut Ui) {
+        let compact=ui.available_width()<590.0;
+        egui::Frame::none()
+            .fill(Color32::from_rgb(29,35,61))
+            .stroke(Stroke::new(1.0,Color32::from_rgb(68,78,117)))
+            .rounding(Rounding::same(19.0))
+            .inner_margin(egui::Margin::symmetric(12.0,10.0))
+            .show(ui,|ui|{
+                let voice=self.voice.is_some();
+                let mic=self.mic_enabled.load(Ordering::Relaxed);
+                let deaf=self.deafened.load(Ordering::Relaxed);
+                let on_air=self.voice.as_ref().is_some_and(|v|
+                    v.transmitting.load(Ordering::Relaxed));
+                let meter_value=self.voice.as_ref().map(|v|
+                    f32::from_bits(v.microphone_level.load(Ordering::Relaxed))
+                ).unwrap_or(0.0).clamp(0.0,1.0);
+
+                if compact {
+                    ui.horizontal(|ui|{
+                        dot(ui,if voice{GREEN}else{BLUE},3.0);
+                        ui.label(RichText::new(if on_air{"МІКРОФОН ПЕРЕДАЄ"}
+                            else if voice{"У ГОЛОСОВОМУ КАНАЛІ"}else{"P2P МЕРЕЖА ГОТОВА"})
+                            .strong().size(10.5).color(if voice{GREEN}else{SOFT}));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                            if let Some(start)=self.voice_started_at {
+                                let elapsed=start.elapsed().as_secs();
+                                ui.label(RichText::new(format!("{:02}:{:02}",
+                                    elapsed/60,elapsed%60))
+                                    .size(10.8).strong().color(SOFT));
+                            }
+                        });
+                    });
+                    ui.add_space(5.0);
+                }
+                ui.horizontal(|ui|{
+                    ui.spacing_mut().item_spacing.x=if compact{6.0}else{10.0};
+                    if !compact {
+                        ui.vertical(|ui|{
+                            ui.horizontal(|ui|{
+                                dot(ui,if voice{GREEN}else{BLUE},3.1);
+                                ui.label(RichText::new(if on_air{"НА ЗВ'ЯЗКУ"}
+                                    else if voice{"У ГОЛОСІ"}else{"P2P READY"})
+                                    .size(10.5).strong().color(if voice{GREEN}else{BLUE}));
+                            });
+                            meter(ui,(meter_value*6.0).min(1.0),12,76.0);
+                            ui.label(text_caption(format!("{} друзів",self.peers.len())));
+                        });
+                        ui.add_space(4.0);
+                    }
+                    if dock_action(ui,"Мікрофон",
+                        if mic{"Вимкнути мікрофон · Ctrl+M / F9"}
+                            else{"Увімкнути мікрофон · Ctrl+M / F9"},
+                        Glyph::Mic,voice,mic && voice,!mic && voice,compact) {
+                        self.mic_enabled.store(!mic,Ordering::Relaxed);
+                    }
+                    if dock_action(ui,"Звук",if deaf{"Увімкнути навушники"}
+                        else{"Вимкнути навушники"},
+                        Glyph::Headphones,voice,false,deaf && voice,compact) {
+                        self.deafened.store(!deaf,Ordering::Relaxed);
+                    }
+                    let camera=self.video.as_ref().is_some_and(|v|v.enabled());
+                    if dock_action(ui,"Камера",if camera{"Вимкнути камеру"}
+                        else{"Увімкнути камеру"},Glyph::Camera,
+                        self.video.is_some(),camera,false,compact) {
+                        self.toggle_camera();
+                    }
+                    let _=dock_action(ui,"Екран","Демонстрація екрана поки недоступна",
+                        Glyph::Monitor,false,false,false,compact);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                        if voice {
+                            if ui.add(egui::Button::new(RichText::new(if compact{"Вийти"}
+                                else{"Завершити"})
+                                .strong().color(BRIGHT).size(12.0))
+                                .fill(Color32::from_rgb(160,51,83))
+                                .rounding(Rounding::same(11.0))
+                                .min_size(Vec2::new(if compact{73.0}else{102.0},40.0))).clicked(){
+                                self.toggle_voice();
+                            }
+                        } else if ui.add_enabled(self.mesh.is_some(),
+                            egui::Button::new(RichText::new(if compact{"Увійти"}
+                                else{"Увійти в голос"}).strong().color(BRIGHT).size(12.0))
+                                .fill(PURPLE).rounding(Rounding::same(11.0))
+                                .min_size(Vec2::new(if compact{73.0}else{117.0},40.0))
+                        ).clicked() {
+                            self.toggle_voice();
+                        }
+                    });
+                });
+            });
+    }
+
     pub(super) fn neon_main(&mut self, ui: &mut Ui) {
         ui.vertical(|ui|{
             ui.add_space(2.0);
@@ -1162,68 +1268,7 @@ impl FriendsApp {
             }
             ui.add_space(10.0);
 
-            egui::Frame::none()
-                .fill(Color32::from_rgb(28, 33, 56))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(62, 73, 105)))
-                .rounding(Rounding::same(17.0))
-                .inner_margin(egui::Margin::symmetric(12.0,11.0))
-                .show(ui,|ui|{
-                    ui.horizontal(|ui|{
-                        ui.spacing_mut().item_spacing.x=7.0;
-                        // Compact call state makes the toolbar usable at 1050px widths.
-                        ui.vertical(|ui|{
-                            ui.horizontal(|ui|{
-                                dot(ui,if self.voice.is_some(){GREEN}else{BLUE},3.0);
-                                ui.label(RichText::new(if self.voice.is_some(){
-                                    "У голосі"
-                                }else{"P2P готовий"}).strong().size(11.0)
-                                    .color(if self.voice.is_some(){GREEN}else{BLUE}));
-                            });
-                            ui.label(RichText::new(format!("{} друзів",self.peers.len()))
-                                .size(10.2).color(MUTED));
-                        });
-                        ui.add_space(4.0);
-                        let voice=self.voice.is_some();
-                        let mic=self.mic_enabled.load(Ordering::Relaxed);
-                        let deaf=self.deafened.load(Ordering::Relaxed);
-                        if icon_button(ui,if mic{"Вимкнути мікрофон · Ctrl+M"}
-                            else{"Увімкнути мікрофон · Ctrl+M"},
-                            Glyph::Mic,voice,mic && voice,!mic && voice,40.0) {
-                            self.mic_enabled.store(!mic,Ordering::Relaxed);
-                        }
-                        if icon_button(ui,if deaf{"Увімкнути звук"}else{"Вимкнути звук"},
-                            Glyph::Headphones,voice,false,deaf && voice,40.0) {
-                            self.deafened.store(!deaf,Ordering::Relaxed);
-                        }
-                        let camera=self.video.as_ref().is_some_and(|v|v.enabled());
-                        if icon_button(ui,if camera{"Вимкнути камеру"}else{"Увімкнути камеру"},
-                            Glyph::Camera,self.video.is_some(),camera,false,40.0){
-                            self.toggle_camera();
-                        }
-                        icon_button(ui,"Демонстрація екрана ще недоступна",
-                            Glyph::Monitor,false,false,false,40.0);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            if voice {
-                                if ui.add(egui::Button::new(
-                                    RichText::new("Вийти").strong().color(BRIGHT).size(12.5))
-                                    .fill(Color32::from_rgb(147,47,73))
-                                    .rounding(Rounding::same(11.0))
-                                    .min_size(Vec2::new(82.0,40.0))).clicked(){
-                                    self.toggle_voice();
-                                }
-                            }else{
-                                if ui.add_enabled(self.mesh.is_some(),
-                                    egui::Button::new(
-                                        RichText::new("Увійти в голос").strong()
-                                            .color(BRIGHT).size(12.0))
-                                    .fill(PURPLE).rounding(Rounding::same(11.0))
-                                    .min_size(Vec2::new(113.0,40.0))).clicked(){
-                                    self.toggle_voice();
-                                }
-                            }
-                        });
-                    });
-                });
+            self.studio_dock(ui);
         });
     }
 }
