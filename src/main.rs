@@ -136,6 +136,7 @@ pub struct FriendsApp {
     focus_mode: bool,
     chat_search_open: bool,
     chat_search: String,
+    chat_unread: usize,
     voice_started_at: Option<Instant>,
     last_notice: Option<(String, Instant)>,
 }
@@ -187,6 +188,7 @@ impl Default for FriendsApp {
             focus_mode: false,
             chat_search_open: false,
             chat_search: String::new(),
+            chat_unread: 0,
             voice_started_at: None,
             last_notice: None,
         }
@@ -221,6 +223,7 @@ impl FriendsApp {
                 MeshEvent::Peers(peers) => self.peers = peers,
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
+                    if self.focus_mode {self.chat_unread=self.chat_unread.saturating_add(1);}
                     self.messages.push(ChatEntry { name, text, system: false });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
@@ -407,8 +410,15 @@ impl eframe::App for FriendsApp {
             self.mic_enabled.store(!mic, Ordering::Relaxed);
         }
         if shortcuts.1 { self.sidebar_open = !self.sidebar_open; }
-        if shortcuts.2 { self.focus_mode = !self.focus_mode; }
-        if shortcuts.3 { self.chat_search_open = true; self.focus_mode = false; }
+        if shortcuts.2 {
+            self.focus_mode = !self.focus_mode;
+            if !self.focus_mode {self.chat_unread=0;}
+        }
+        if shortcuts.3 {
+            self.chat_search_open = true;
+            self.focus_mode = false;
+            self.chat_unread = 0;
+        }
         if shortcuts.4 {
             if self.chat_search_open {
                 self.chat_search_open = false;
@@ -417,6 +427,7 @@ impl eframe::App for FriendsApp {
                 self.settings_open = false;
             } else {
                 self.focus_mode = false;
+                self.chat_unread=0;
             }
         }
         // Lower idle CPU/GPU load, but repaint quickly while in a live call.
