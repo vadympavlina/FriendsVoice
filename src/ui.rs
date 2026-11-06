@@ -14,7 +14,7 @@ const SOFT: Color32 = Color32::from_rgb(181, 193, 216);
 #[derive(Clone, Copy)]
 enum Glyph {
     Mic, Headphones, Camera, Monitor, Settings, Send, Power,
-    Users, Network, Volume, Search, Close, Shield, Chat,
+    Users, Network, Volume, Search, Close, Shield, Chat, Sidebar, Focus, Keyboard,
 }
 fn card() -> egui::Frame {
     egui::Frame::none()
@@ -179,6 +179,29 @@ fn glyph(ui: &Ui, icon: Glyph, r: Rect, color: Color32) {
                 Rounding::same(3.0),Stroke::new(1.7,color));
             line((-3.0,6.0),(-7.0,11.0)); line((-7.0,11.0),(-7.0,6.0));
         }
+        Glyph::Sidebar => {
+            ui.painter().rect_stroke(Rect::from_min_max(at(-11.0,-9.0),at(11.0,9.0)),
+                Rounding::same(3.0),Stroke::new(1.7,color));
+            line((-4.0,-9.0),(-4.0,9.0));
+            line((-1.0,-4.0),(8.0,-4.0));
+            line((-1.0,1.0),(6.0,1.0));
+        }
+        Glyph::Focus => {
+            line((-11.0,-4.0),(-11.0,-10.0));line((-11.0,-10.0),(-5.0,-10.0));
+            line((5.0,-10.0),(11.0,-10.0));line((11.0,-10.0),(11.0,-4.0));
+            line((-11.0,4.0),(-11.0,10.0));line((-11.0,10.0),(-5.0,10.0));
+            line((5.0,10.0),(11.0,10.0));line((11.0,10.0),(11.0,4.0));
+        }
+        Glyph::Keyboard => {
+            ui.painter().rect_stroke(Rect::from_min_max(at(-12.0,-8.0),at(12.0,8.0)),
+                Rounding::same(3.0),Stroke::new(1.6,color));
+            for yy in [-4.0,0.0] {
+                for xx in [-7.0,-2.0,3.0,8.0] {
+                    ui.painter().circle_filled(at(xx,yy),1.0,color);
+                }
+            }
+            line((-6.0,4.0),(6.0,4.0));
+        }
     }
 }
 fn icon_button(ui: &mut Ui, name: &str, icon: Glyph, enabled: bool, selected: bool, danger: bool, side: f32) -> bool {
@@ -188,10 +211,15 @@ fn icon_button(ui: &mut Ui, name: &str, icon: Glyph, enabled: bool, selected: bo
         else if selected {Color32::from_rgb(31, 125, 98)} else if response.hovered() {
             Color32::from_rgb(65, 70, 113)
         } else {SURFACE_2};
+    if enabled && response.hovered() {
+        ui.painter().rect_filled(rect.expand(2.0), Rounding::same(14.0),
+            PURPLE.linear_multiply(0.14));
+    }
     ui.painter().rect_filled(rect, Rounding::same(12.0), base);
     ui.painter().rect_stroke(rect, Rounding::same(12.0),
-        Stroke::new(if selected {1.5} else {1.0},
-            if selected {GREEN} else if danger {RED.linear_multiply(0.65)} else {BORDER}));
+        Stroke::new(if selected {1.8} else if response.hovered() {1.4}else{1.0},
+            if selected {GREEN} else if danger {RED.linear_multiply(0.75)}
+                else if response.hovered(){PURPLE}else{BORDER}));
     glyph(ui, icon, rect, if !enabled {MUTED.linear_multiply(0.48)} else {BRIGHT});
     enabled && response.clicked()
 }
