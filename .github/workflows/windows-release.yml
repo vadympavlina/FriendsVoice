@@ -2,7 +2,7 @@ name: Friends Voice Windows builds
 
 on:
   push:
-    branches: [main, 'dev/**']
+    branches: [main, 'dev/**', 'fix/**']
     tags: ['v*']
   workflow_dispatch:
 
