@@ -135,6 +135,7 @@ pub struct FriendsApp {
     sidebar_open: bool,
     focus_mode: bool,
     chat_search_open: bool,
+    chat_search_focus: bool,
     chat_search: String,
     chat_unread: usize,
     voice_started_at: Option<Instant>,
@@ -187,6 +188,7 @@ impl Default for FriendsApp {
             sidebar_open: true,
             focus_mode: false,
             chat_search_open: false,
+            chat_search_focus: false,
             chat_search: String::new(),
             chat_unread: 0,
             voice_started_at: None,
@@ -416,12 +418,14 @@ impl eframe::App for FriendsApp {
         }
         if shortcuts.3 {
             self.chat_search_open = true;
+            self.chat_search_focus = true;
             self.focus_mode = false;
             self.chat_unread = 0;
         }
         if shortcuts.4 {
             if self.chat_search_open {
                 self.chat_search_open = false;
+                self.chat_search_focus = false;
                 self.chat_search.clear();
             } else if self.settings_open {
                 self.settings_open = false;
