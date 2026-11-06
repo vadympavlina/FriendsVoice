@@ -233,6 +233,7 @@ impl Mesh {
                                 if new {
                                     send(&socket, &MeshPacket::Hello {
                                         id, name: nickname.clone(), voice: in_voice,
+                                        protocol: PROTOCOL_VERSION,
                                     }, source);
                                     let _ = event_tx.send(MeshEvent::Notice(if protocol != PROTOCOL_VERSION {
                                         format!("{name} має несумісну версію Friends Voice — оновіть усі комп'ютери до 0.8.")
@@ -252,6 +253,7 @@ impl Mesh {
                                     if seeds.insert(address) {
                                         send(&socket, &MeshPacket::Hello {
                                             id, name: nickname.clone(), voice: in_voice,
+                                            protocol: PROTOCOL_VERSION,
                                         }, address);
                                     }
                                 }
