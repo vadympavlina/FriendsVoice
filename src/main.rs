@@ -1,48 +1,33 @@
 #![windows_subsystem = "windows"]
+mod mesh;
 mod protocol;
 mod voice;
 
 use eframe::egui::{self, Color32, RichText};
-use protocol::{Packet, UserInfo};
+use mesh::{Mesh, MeshEvent, PeerView};
+use protocol::{CONTROL_PORT, MAX_NODES};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
-    net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc::{self, Receiver, Sender},
-        Arc,
-    },
-    thread,
+    sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc},
     time::Duration,
 };
 use voice::VoiceSession;
 
-const BACKGROUND: Color32 = Color32::from_rgb(22, 24, 34);
-const SIDEBAR: Color32 = Color32::from_rgb(17, 19, 29);
-const ACCENT: Color32 = Color32::from_rgb(105, 118, 244);
-const MUTED: Color32 = Color32::from_rgb(151, 158, 177);
-const SUCCESS: Color32 = Color32::from_rgb(70, 213, 158);
-const DANGER: Color32 = Color32::from_rgb(244, 102, 113);
-
-enum Event {
-    Connected { users: Vec<UserInfo>, token: u128, addr: SocketAddr },
-    Packet(Packet),
-    Disconnected(String),
-}
-
-struct ChatEntry {
-    name: String,
-    text: String,
-    system: bool,
-}
+const BACKGROUND: Color32 = Color32::from_rgb(23, 25, 36);
+const SIDEBAR: Color32 = Color32::from_rgb(16, 18, 29);
+const ACCENT: Color32 = Color32::from_rgb(103, 116, 246);
+const MUTED: Color32 = Color32::from_rgb(152, 159, 178);
+const GREEN: Color32 = Color32::from_rgb(65, 214, 160);
+const RED: Color32 = Color32::from_rgb(245, 98, 115);
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 struct Settings {
-    host: String,
     nickname: String,
+    known_ips: Vec<String>,
     input_device: String,
     output_device: String,
     volume: f32,
@@ -51,8 +36,8 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            host: "127.0.0.1:45888".into(),
             nickname: "Друг".into(),
+            known_ips: vec![],
             input_device: String::new(),
             output_device: String::new(),
             volume: 1.0,
@@ -61,154 +46,51 @@ impl Default for Settings {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|path| PathBuf::from(path).join("FriendsVoice").join("settings.json"))
+    std::env::var_os("APPDATA")
+        .map(|dir| PathBuf::from(dir).join("FriendsVoice").join("mesh-settings.json"))
 }
 
-fn read_settings() -> Settings {
-    settings_path().and_then(|path| fs::read_to_string(path).ok())
+fn load_settings() -> Settings {
+    settings_path()
+        .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
 
-fn persist_settings(settings: &Settings) {
+fn save_settings(settings: &Settings) {
     let Some(path) = settings_path() else { return; };
     if let Some(parent) = path.parent() {
         if fs::create_dir_all(parent).is_err() { return; }
     }
-    if let Ok(data) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(path, data);
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = fs::write(path, json);
     }
 }
 
-fn network_worker(
-    host: String,
-    nickname: String,
-    password: String,
-    send_events: Sender<Event>,
-    receive_packets: Receiver<Packet>,
-    awake: Arc<AtomicBool>,
-) {
-    let addr = match host.to_socket_addrs().ok().and_then(|mut it| it.next()) {
-        Some(addr) => addr,
-        None => {
-            let _ = send_events.send(Event::Disconnected("Неправильна адреса сервера".into()));
-            return;
-        }
-    };
-    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(6)) {
-        Ok(stream) => stream,
-        Err(e) => {
-            let _ = send_events.send(Event::Disconnected(format!("Не вдалося підключитися: {e}")));
-            return;
-        }
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let packet = Packet::Hello { nickname, password };
-    if writeln!(stream, "{}", serde_json::to_string(&packet).unwrap()).is_err() {
-        let _ = send_events.send(Event::Disconnected("Помилка авторизації".into()));
-        return;
-    }
-    let read_stream = match stream.try_clone() {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = send_events.send(Event::Disconnected(format!("Помилка сокета: {e}")));
-            return;
-        }
-    };
-    let mut reader = BufReader::new(read_stream);
-    let mut line = String::new();
-    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-        let _ = send_events.send(Event::Disconnected("Сервер закрив підключення".into()));
-        return;
-    }
-    if line.len() > 8192 {
-        let _ = send_events.send(Event::Disconnected("Завелика відповідь сервера".into()));
-        return;
-    }
-    match serde_json::from_str::<Packet>(&line) {
-        Ok(Packet::Welcome { users, voice_token, .. }) => {
-            match u128::from_str_radix(&voice_token, 16) {
-                Ok(token) => {
-                    let _ = send_events.send(Event::Connected { users, token, addr });
-                }
-                Err(_) => {
-                    let _ = send_events.send(Event::Disconnected("Недопустимий токен від сервера".into()));
-                    return;
-                }
-            }
-        }
-        Ok(Packet::Error { text }) => {
-            let _ = send_events.send(Event::Disconnected(text));
-            return;
-        }
-        _ => {
-            let _ = send_events.send(Event::Disconnected("Невідома відповідь сервера".into()));
-            return;
-        }
-    }
-    let write_events = send_events.clone();
-    let write_awake = Arc::clone(&awake);
-    thread::spawn(move || {
-        while write_awake.load(Ordering::Relaxed) {
-            match receive_packets.recv_timeout(Duration::from_millis(100)) {
-                Ok(packet) => {
-                    if writeln!(stream, "{}", serde_json::to_string(&packet).unwrap()).is_err() {
-                        let _ = write_events.send(Event::Disconnected("Не вдалося надіслати повідомлення".into()));
-                        break;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-        let _ = stream.shutdown(Shutdown::Both);
-    });
-    // A short read timeout on Windows may abort a quiet connection, even though it is alive.
-    // Keep the established TCP socket in blocking mode. The writer thread explicitly shuts
-    // down its clone when the user disconnects, so this read unblocks without polling timeouts.
-    if let Err(error) = reader.get_ref().set_read_timeout(None) {
-        let _ = send_events.send(Event::Disconnected(format!("Помилка TCP: {error}")));
-        awake.store(false, Ordering::Relaxed);
-        return;
-    }
-    let reason = loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break "Сервер закрив TCP-з'єднання".to_string(),
-            Ok(n) if n > 8192 => break "Сервер надіслав завеликий пакет".to_string(),
-            Ok(_) => {
-                match serde_json::from_str::<Packet>(&line) {
-                    Ok(packet) => {
-                        let _ = send_events.send(Event::Packet(packet));
-                    }
-                    Err(error) => {
-                        break format!("Некоректний пакет від сервера: {error}");
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => break format!("Помилка читання TCP: {error}"),
-        }
-    };
-    if awake.swap(false, Ordering::Relaxed) {
-        let _ = send_events.send(Event::Disconnected(reason));
+fn parse_known_ip(text: &str) -> Option<SocketAddr> {
+    let ip: Ipv4Addr = text.trim().parse().ok()?;
+    if ip.octets()[0] == 26 || ip.is_loopback() {
+        Some(SocketAddr::V4(SocketAddrV4::new(ip, CONTROL_PORT)))
+    } else {
+        None
     }
 }
 
-struct App {
+struct ChatEntry {
+    name: String,
+    text: String,
+    system: bool,
+}
+
+pub struct FriendsApp {
     settings: Settings,
-    password: String,
+    mesh: Option<Mesh>,
+    peers: Vec<PeerView>,
+    network_error: Option<String>,
+    friend_ip: String,
     draft: String,
     messages: Vec<ChatEntry>,
-    users: Vec<UserInfo>,
-    connecting: bool,
-    connected: bool,
-    events_tx: Sender<Event>,
-    events_rx: Receiver<Event>,
-    outbound: Option<Sender<Packet>>,
-    connection_alive: Option<Arc<AtomicBool>>,
     voice: Option<VoiceSession>,
-    session: Option<(SocketAddr, u128)>,
     mic_enabled: Arc<AtomicBool>,
     deafened: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
@@ -217,32 +99,30 @@ struct App {
     settings_open: bool,
 }
 
-impl Default for App {
+impl Default for FriendsApp {
     fn default() -> Self {
-        let (events_tx, events_rx) = mpsc::channel();
-        let settings = read_settings();
-        let volume = Arc::new(AtomicU32::new(settings.volume.clamp(0.0, 2.0).to_bits()));
+        let settings = load_settings();
+        let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
+        let (mesh, network_error) = match Mesh::start(settings.nickname.clone(), seeds) {
+            Ok(mesh) => (Some(mesh), None),
+            Err(error) => (None, Some(error)),
+        };
         Self {
+            volume: Arc::new(AtomicU32::new(settings.volume.clamp(0.0, 2.0).to_bits())),
             settings,
-            password: String::new(),
+            mesh,
+            peers: vec![],
+            network_error,
+            friend_ip: String::new(),
             draft: String::new(),
             messages: vec![ChatEntry {
                 name: String::new(),
-                text: "Ласкаво просимо! Підключись до сервера, щоб спілкуватися з друзями.".into(),
+                text: "Friends Voice працює без сервера! Друзі з однієї мережі Radmin VPN можуть знайти одне одного автоматично. Якщо ні — додай IP друга один раз.".into(),
                 system: true,
             }],
-            users: vec![],
-            connecting: false,
-            connected: false,
-            events_tx,
-            events_rx,
-            outbound: None,
-            connection_alive: None,
             voice: None,
-            session: None,
             mic_enabled: Arc::new(AtomicBool::new(true)),
             deafened: Arc::new(AtomicBool::new(false)),
-            volume,
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
             settings_open: false,
@@ -250,177 +130,169 @@ impl Default for App {
     }
 }
 
-impl App {
+impl FriendsApp {
     fn notice(&mut self, text: impl Into<String>) {
         self.messages.push(ChatEntry { name: String::new(), text: text.into(), system: true });
-        if self.messages.len() > 500 { self.messages.remove(0); }
+        if self.messages.len() > 600 { self.messages.remove(0); }
     }
 
-    fn connect(&mut self) {
-        if self.connected || self.connecting { return; }
-        let host = self.settings.host.trim().to_string();
-        let nickname = self.settings.nickname.trim().to_string();
-        if host.is_empty() || self.password.len() < 8 || nickname.is_empty() || nickname.chars().count() > 24 {
-            self.notice("Перевір адресу, нікнейм (1–24 символи) і пароль (від 8 символів).");
+    fn remember_ip(&mut self, address: SocketAddr) {
+        let ip = address.ip().to_string();
+        if !self.settings.known_ips.contains(&ip) && self.settings.known_ips.len() < 32 {
+            self.settings.known_ips.push(ip);
+            save_settings(&self.settings);
+        }
+    }
+
+    fn poll_events(&mut self) {
+        let mut events = Vec::new();
+        if let Some(mesh) = &self.mesh {
+            while let Ok(event) = mesh.events.try_recv() {
+                events.push(event);
+            }
+        }
+        for event in events {
+            match event {
+                MeshEvent::Peers(peers) => self.peers = peers,
+                MeshEvent::Notice(text) => self.notice(text),
+                MeshEvent::Chat { name, text } => {
+                    self.messages.push(ChatEntry { name, text, system: false });
+                    if self.messages.len() > 600 { self.messages.remove(0); }
+                }
+                MeshEvent::LearnedAddress(address) => self.remember_ip(address),
+            }
+        }
+    }
+
+    fn add_friend(&mut self) {
+        let text = self.friend_ip.trim().to_string();
+        match parse_known_ip(&text) {
+            Some(address) => {
+                self.remember_ip(address);
+                if let Some(mesh) = &self.mesh {
+                    mesh.add_peer(address);
+                }
+                self.friend_ip.clear();
+                self.notice(format!("Пробуємо знайти друга за адресою {text}."));
+            }
+            None => self.notice("Введи IPv4-адресу друга з Radmin VPN, наприклад 26.12.34.56."),
+        }
+    }
+
+    fn retry_network(&mut self) {
+        let seeds = self.settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
+        match Mesh::start(self.settings.nickname.clone(), seeds) {
+            Ok(mesh) => {
+                self.mesh = Some(mesh);
+                self.network_error = None;
+                self.notice("P2P-мережу запущено.");
+            }
+            Err(error) => self.network_error = Some(error),
+        }
+    }
+
+    fn send_chat(&mut self) {
+        let text = self.draft.trim().to_string();
+        if text.is_empty() { return; }
+        if text.chars().count() > 1000 {
+            self.notice("Повідомлення не може бути довшим за 1000 символів.");
             return;
         }
-        persist_settings(&self.settings);
-        let (tx, rx) = mpsc::channel();
-        let alive = Arc::new(AtomicBool::new(true));
-        self.outbound = Some(tx);
-        self.connection_alive = Some(Arc::clone(&alive));
-        self.connecting = true;
-        let events = self.events_tx.clone();
-        let password = self.password.clone();
-        thread::spawn(move || network_worker(host, nickname, password, events, rx, alive));
-    }
-
-    fn disconnect(&mut self) {
-        if let Some(alive) = self.connection_alive.take() {
-            alive.store(false, Ordering::Relaxed);
-        }
-        self.voice.take();
-        self.outbound = None;
-        self.connected = false;
-        self.connecting = false;
-        self.session = None;
-        self.users.clear();
-    }
-
-    fn poll(&mut self) {
-        while let Ok(event) = self.events_rx.try_recv() {
-            match event {
-                Event::Connected { users, token, addr } => {
-                    if self.connection_alive.as_ref().is_none_or(|a| !a.load(Ordering::Relaxed)) {
-                        continue;
-                    }
-                    self.users = users;
-                    self.session = Some((addr, token));
-                    self.connected = true;
-                    self.connecting = false;
-                    self.notice("З'єднання встановлено! Можна писати в чат або приєднатися до голосу.");
-                }
-                Event::Disconnected(text) => {
-                    if self.connected || self.connecting {
-                        self.disconnect();
-                        self.notice(format!("Помилка / вихід: {text}"));
-                    }
-                }
-                Event::Packet(packet) => match packet {
-                    Packet::Users { users } => self.users = users,
-                    Packet::Chat { from, text } => {
-                        self.messages.push(ChatEntry { name: from, text, system: false });
-                        if self.messages.len() > 500 { self.messages.remove(0); }
-                    }
-                    Packet::Notice { text } | Packet::Error { text } => self.notice(text),
-                    _ => {}
-                }
-            }
+        if let Some(mesh) = &self.mesh {
+            mesh.send_chat(text);
+            self.draft.clear();
         }
     }
 
     fn toggle_voice(&mut self) {
-        if self.voice.is_some() {
-            self.voice.take();
-            self.notice("Ти залишив(-ла) голосовий канал.");
+        if self.voice.take().is_some() {
+            if let Some(mesh) = &self.mesh { mesh.voice(false); }
+            self.notice("Ти вийшов(-ла) з голосового каналу.");
             return;
         }
-        let Some((addr, token)) = self.session else { return; };
+        let Some(mesh) = &self.mesh else { return; };
         match VoiceSession::start(
-            addr, token, &self.settings.input_device, &self.settings.output_device,
-            Arc::clone(&self.mic_enabled), Arc::clone(&self.deafened), Arc::clone(&self.volume),
+            mesh.id,
+            Arc::clone(&mesh.voice_targets),
+            &self.settings.input_device,
+            &self.settings.output_device,
+            Arc::clone(&self.mic_enabled),
+            Arc::clone(&self.deafened),
+            Arc::clone(&self.volume),
         ) {
             Ok(voice) => {
                 self.voice = Some(voice);
-                self.notice("Голосовий канал підключено. Рекомендуємо використовувати навушники.");
+                mesh.voice(true);
+                self.notice("Голос підключено напряму до друзів. Можна виходити з каналу незалежно одне від одного.");
             }
-            Err(err) => self.notice(format!("Голос не запустився: {err}")),
+            Err(error) => self.notice(format!("Не вдалося запустити голос: {error}")),
         }
-    }
-
-    fn send_message(&mut self) {
-        if !self.connected { return; }
-        let text = self.draft.trim().to_owned();
-        if text.is_empty() { return; }
-        if text.chars().count() > 1000 {
-            self.notice("Максимальна довжина повідомлення — 1000 символів.");
-            return;
-        }
-        if let Some(outbound) = &self.outbound {
-            if outbound.send(Packet::SendChat { text }).is_ok() {
-                self.draft.clear();
-            }
-        }
-    }
-
-    fn header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("# загальний").size(21.0).color(Color32::WHITE));
-            ui.label(RichText::new("Друзі · Чат · Голос").color(MUTED));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let status = if self.connected { "● У мережі" } else if self.connecting { "◌ Підключення" } else { "○ Офлайн" };
-                ui.label(RichText::new(status).color(if self.connected { SUCCESS } else { MUTED }));
-                ui.separator();
-                ui.label("Friends Voice 0.2");
-            });
-        });
-        ui.add_space(8.0);
-        ui.separator();
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(12.0);
-        ui.heading(RichText::new("◉ Friends Voice").size(20.0).color(Color32::WHITE));
-        ui.label(RichText::new("PRIVATE SPACE / RADMIN VPN").size(10.0).color(MUTED));
+        ui.heading(RichText::new("◉ Friends Voice").size(21.0).color(Color32::WHITE));
+        ui.label(RichText::new("SERVERLESS · RADMIN VPN").size(10.0).color(MUTED));
         ui.add_space(20.0);
-        ui.label(RichText::new("ПІДКЛЮЧЕННЯ").size(11.0).strong().color(MUTED));
-        ui.add_space(6.0);
-        ui.label("Адреса сервера");
-        ui.add_enabled(!self.connected && !self.connecting,
-            egui::TextEdit::singleline(&mut self.settings.host).desired_width(f32::INFINITY));
-        ui.label("Нікнейм");
-        ui.add_enabled(!self.connected && !self.connecting,
-            egui::TextEdit::singleline(&mut self.settings.nickname).desired_width(f32::INFINITY));
-        ui.label("Пароль кімнати");
-        ui.add_enabled(!self.connected && !self.connecting,
-            egui::TextEdit::singleline(&mut self.password).password(true).desired_width(f32::INFINITY));
-        ui.add_space(10.0);
-        if self.connected {
-            if ui.add_sized([ui.available_width(), 30.0],
-                egui::Button::new("Відключитися").fill(Color32::from_rgb(86, 43, 56))).clicked() {
-                self.disconnect();
-                self.notice("Відключено вручну.");
+
+        ui.label(RichText::new("СТАН МЕРЕЖІ").size(11.0).strong().color(MUTED));
+        if self.mesh.is_some() {
+            ui.label(RichText::new("● P2P вузол працює").color(GREEN).strong());
+        } else {
+            ui.label(RichText::new("● Помилка P2P вузла").color(RED));
+            if let Some(message) = &self.network_error {
+                ui.label(RichText::new(message).size(11.0).color(RED));
             }
-        } else if ui.add_enabled_ui(!self.connecting, |ui| {
-            ui.add_sized([ui.available_width(), 32.0],
-                egui::Button::new("Підключитися →").fill(ACCENT))
-        }).inner.clicked() {
-            self.connect();
+            if ui.button("Повторити запуск").clicked() { self.retry_network(); }
         }
-        if self.connecting { ui.spinner(); }
-        ui.add_space(18.0);
+        let ips = self.mesh.as_ref().map(|m| m.local_radmin_ips.as_slice()).unwrap_or(&[]);
+        if ips.is_empty() {
+            ui.label(RichText::new("Radmin IP не знайдено. Перевір VPN і перезапусти програму.")
+                .size(11.0).color(MUTED));
+        } else {
+            for ip in ips {
+                ui.label(RichText::new(format!("Твій IP: {ip}")).size(12.0).color(MUTED));
+            }
+        }
+        ui.add_space(16.0);
         ui.separator();
         ui.add_space(8.0);
-        ui.label(RichText::new("ГОЛОСОВІ КАНАЛИ").size(11.0).strong().color(MUTED));
-        ui.add_space(6.0);
+
+        ui.label(RichText::new("ГОЛОСОВИЙ КАНАЛ").size(11.0).strong().color(MUTED));
         let joined = self.voice.is_some();
-        ui.label(RichText::new(if joined { "● Загальний · підключено" } else { "◌ Загальний" })
-            .color(if joined { SUCCESS } else { Color32::LIGHT_GRAY }));
-        if ui.add_enabled(self.connected, egui::Button::new(
+        ui.label(RichText::new(if joined { "● Загальний · у голосі" } else { "◌ Загальний" })
+            .color(if joined { GREEN } else { Color32::LIGHT_GRAY }));
+        if ui.add_enabled(self.mesh.is_some(), egui::Button::new(
             if joined { "Залишити голос" } else { "Приєднатися до голосу" }
-        )).clicked() {
+        ).fill(if joined { Color32::from_rgb(93, 45, 56) } else { ACCENT })).clicked() {
             self.toggle_voice();
         }
-        ui.add_space(13.0);
+        ui.add_space(12.0);
         ui.separator();
-        ui.label(RichText::new(format!("УЧАСНИКИ · {} / 5", self.users.len())).size(11.0).strong().color(MUTED));
-        for user in &self.users {
+
+        ui.label(RichText::new(format!("ДРУЗІ В МЕРЕЖІ · {} / {}", self.peers.len() + 1, MAX_NODES))
+            .size(11.0).strong().color(MUTED));
+        ui.horizontal(|ui| {
+            ui.colored_label(GREEN, "●");
+            ui.label(RichText::new(format!("{} (ти)", self.settings.nickname)).strong());
+        });
+        for p in &self.peers {
             ui.horizontal(|ui| {
-                ui.colored_label(SUCCESS, "●");
-                ui.label(&user.nickname);
+                ui.colored_label(GREEN, "●");
+                ui.label(&p.name);
+                if p.voice { ui.label(RichText::new("🎙").size(11.0)); }
             });
         }
-        ui.add_space(10.0);
+        ui.add_space(14.0);
+        ui.separator();
+        ui.label(RichText::new("ПОШУК ДРУЗІВ").size(11.0).strong().color(MUTED));
+        ui.label(RichText::new("Якщо автоматичний пошук не спрацював, додай IP друга один раз.")
+            .size(11.0).color(MUTED));
+        ui.add(egui::TextEdit::singleline(&mut self.friend_ip)
+            .hint_text("26.x.x.x").desired_width(f32::INFINITY));
+        if ui.add_enabled(self.mesh.is_some(),
+            egui::Button::new("Знайти за IP")).clicked() { self.add_friend(); }
+        ui.add_space(14.0);
         ui.separator();
         if ui.button("⚙ Налаштування звуку").clicked() {
             self.settings_open = !self.settings_open;
@@ -431,30 +303,42 @@ impl App {
         ui.add_space(12.0);
         ui.heading(RichText::new("Налаштування").size(18.0));
         ui.separator();
+        ui.label("Нікнейм");
+        let changed = ui.add(egui::TextEdit::singleline(&mut self.settings.nickname)
+            .desired_width(f32::INFINITY)).changed();
+        if changed {
+            self.settings.nickname.truncate(48);
+            if let Some(mesh) = &self.mesh {
+                if !self.settings.nickname.trim().is_empty() && self.settings.nickname.chars().count() <= 24 {
+                    mesh.rename(self.settings.nickname.clone());
+                }
+            }
+        }
+        ui.add_space(9.0);
         ui.label(RichText::new("МІКРОФОН").size(11.0).color(MUTED));
-        egui::ComboBox::from_id_salt("mic_device")
+        egui::ComboBox::from_id_salt("input_devices")
             .width(ui.available_width() - 8.0)
             .selected_text(if self.settings.input_device.is_empty() {
                 "За замовчуванням" } else { &self.settings.input_device })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.settings.input_device, String::new(), "За замовчуванням");
-                for name in &self.input_devices {
-                    ui.selectable_value(&mut self.settings.input_device, name.clone(), name);
+                for device in &self.input_devices {
+                    ui.selectable_value(&mut self.settings.input_device, device.clone(), device);
                 }
             });
         ui.add_space(10.0);
-        ui.label(RichText::new("ДИНАМІКИ / НАВУШНИКИ").size(11.0).color(MUTED));
-        egui::ComboBox::from_id_salt("speaker_device")
+        ui.label(RichText::new("НАВУШНИКИ / ДИНАМІКИ").size(11.0).color(MUTED));
+        egui::ComboBox::from_id_salt("output_devices")
             .width(ui.available_width() - 8.0)
             .selected_text(if self.settings.output_device.is_empty() {
                 "За замовчуванням" } else { &self.settings.output_device })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut self.settings.output_device, String::new(), "За замовчуванням");
-                for name in &self.output_devices {
-                    ui.selectable_value(&mut self.settings.output_device, name.clone(), name);
+                for device in &self.output_devices {
+                    ui.selectable_value(&mut self.settings.output_device, device.clone(), device);
                 }
             });
-        if ui.button("↻ Оновити список пристроїв").clicked() {
+        if ui.button("↻ Оновити пристрої").clicked() {
             self.input_devices = voice::list_input_devices();
             self.output_devices = voice::list_output_devices();
         }
@@ -463,74 +347,77 @@ impl App {
         if ui.add(egui::Slider::new(&mut volume, 0.0..=2.0).text("Гучність")).changed() {
             self.volume.store(volume.to_bits(), Ordering::Relaxed);
         }
-        ui.add_space(12.0);
+        ui.add_space(10.0);
         ui.label(RichText::new("РІВЕНЬ МІКРОФОНА").size(11.0).color(MUTED));
-        let level = self.voice.as_ref()
-            .map(|v| f32::from_bits(v.microphone_level.load(Ordering::Relaxed)))
-            .unwrap_or(0.0).clamp(0.0, 1.0);
-        ui.add(egui::ProgressBar::new((level * 7.0).min(1.0)).desired_width(ui.available_width()));
-        ui.add_space(7.0);
-        ui.label(RichText::new("Після зміни аудіопристрою вийди з голосового каналу та зайди знову.")
+        let rms = self.voice.as_ref().map(|s|
+            f32::from_bits(s.microphone_level.load(Ordering::Relaxed))
+        ).unwrap_or(0.0).clamp(0.0, 1.0);
+        ui.add(egui::ProgressBar::new((rms * 7.0).min(1.0)).desired_width(ui.available_width()));
+        ui.label(RichText::new("Після зміни пристроїв перезайди в голос.")
             .size(11.0).color(MUTED));
-        ui.add_space(9.0);
         if ui.button("Зберегти налаштування").clicked() {
             self.settings.volume = volume;
-            persist_settings(&self.settings);
-            self.notice("Налаштування збережено на цьому комп'ютері.");
+            save_settings(&self.settings);
+            self.notice("Налаштування збережено.");
         }
-        ui.add_space(20.0);
+        ui.add_space(17.0);
         ui.separator();
-        ui.label(RichText::new("ПОКИ НЕ ПІДТРИМУЄТЬСЯ").size(10.0).color(MUTED));
-        ui.label(RichText::new("Відео й демонстрація екрана з'являться в майбутніх версіях.")
+        ui.label(RichText::new("ВІДЕО ТА ДЕМОНСТРАЦІЯ ЕКРАНА")
+            .size(11.0).color(MUTED).strong());
+        ui.label(RichText::new("Поки в розробці. Ця збірка перевіряє повністю незалежний голос і чат.")
             .size(12.0).color(MUTED));
     }
 
     fn chat_panel(&mut self, ui: &mut egui::Ui) {
-        self.header(ui);
-        let chat_height = (ui.available_height() - 84.0).max(120.0);
-        egui::ScrollArea::vertical()
-            .max_height(chat_height)
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
+        ui.horizontal(|ui| {
+            ui.heading(RichText::new("# загальний").size(21.0).color(Color32::WHITE));
+            ui.label(RichText::new("Приватний чат · Без сервера").color(MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("Friends Voice 0.3").color(MUTED));
+            });
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        let height = (ui.available_height() - 96.0).max(100.0);
+        egui::ScrollArea::vertical().max_height(height)
+            .stick_to_bottom(true).auto_shrink([false,false])
             .show(ui, |ui| {
-                ui.set_min_height(chat_height);
-                for message in &self.messages {
-                    if message.system {
-                        ui.add_space(5.0);
-                        ui.label(RichText::new(format!("◆ {}", message.text)).size(12.0).color(MUTED));
+                ui.set_min_height(height);
+                for msg in &self.messages {
+                    if msg.system {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(format!("◆ {}", msg.text)).size(12.0).color(MUTED));
                     } else {
-                        ui.add_space(9.0);
-                        let own = message.name == self.settings.nickname;
+                        ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("●").color(if own { ACCENT } else { SUCCESS }));
-                            ui.label(RichText::new(&message.name).strong().color(if own { ACCENT } else { Color32::WHITE }));
+                            ui.colored_label(if msg.name == self.settings.nickname { ACCENT } else { GREEN }, "●");
+                            ui.label(RichText::new(&msg.name).strong());
                         });
-                        ui.indent(&message.name, |ui| {
-                            ui.label(RichText::new(&message.text).size(14.0));
+                        ui.indent(format!("{}{}", msg.name, msg.text), |ui| {
+                            ui.label(RichText::new(&msg.text).size(14.0));
                         });
                     }
                 }
             });
         ui.separator();
-        ui.add_space(5.0);
         ui.horizontal(|ui| {
-            let send_width = (ui.available_width() - 100.0).max(120.0);
-            let edit = ui.add_enabled(self.connected, egui::TextEdit::singleline(&mut self.draft)
-                .hint_text(if self.connected { "Повідомлення для друзів…" } else { "Підключися, щоб написати…" })
-                .desired_width(send_width));
-            if self.connected && edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                self.send_message();
+            let available = (ui.available_width() - 100.0).max(120.0);
+            let edit = ui.add_enabled(self.mesh.is_some(),
+                egui::TextEdit::singleline(&mut self.draft)
+                .hint_text("Повідомлення друзям…").desired_width(available));
+            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.send_chat();
             }
-            if ui.add_enabled(self.connected, egui::Button::new("Надіслати").fill(ACCENT)).clicked() {
-                self.send_message();
+            if ui.add_enabled(self.mesh.is_some(), egui::Button::new("Надіслати").fill(ACCENT)).clicked() {
+                self.send_chat();
             }
         });
-        ui.add_space(5.0);
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             if self.voice.is_some() {
                 let mic = self.mic_enabled.load(Ordering::Relaxed);
                 if ui.add(egui::Button::new(if mic { "🎙 Мікрофон увімкнено" } else { "🔇 Мікрофон вимкнено" })
-                    .fill(if mic { Color32::from_rgb(34, 100, 77) } else { DANGER })).clicked() {
+                    .fill(if mic { Color32::from_rgb(35, 103, 75) } else { RED })).clicked() {
                     self.mic_enabled.store(!mic, Ordering::Relaxed);
                 }
                 let deaf = self.deafened.load(Ordering::Relaxed);
@@ -539,28 +426,26 @@ impl App {
                 }
                 ui.label(RichText::new("Ctrl+M — мікрофон").size(11.0).color(MUTED));
             } else {
-                ui.label(RichText::new("🎧 Для голосу натисни «Приєднатися до голосу» ліворуч.")
+                ui.label(RichText::new("🎧 Натисни «Приєднатися до голосу», коли захочеш поговорити.")
                     .size(12.0).color(MUTED));
             }
         });
     }
 }
 
-impl eframe::App for App {
+impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        self.poll();
-        if self.voice.is_some() && ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::M)) {
-            let old = self.mic_enabled.load(Ordering::Relaxed);
-            self.mic_enabled.store(!old, Ordering::Relaxed);
+        self.poll_events();
+        if self.voice.is_some() && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::M)) {
+            let mic = self.mic_enabled.load(Ordering::Relaxed);
+            self.mic_enabled.store(!mic, Ordering::Relaxed);
         }
-        ctx.request_repaint_after(Duration::from_millis(85));
-        egui::SidePanel::left("friends_sidebar")
-            .resizable(false).exact_width(244.0)
+        ctx.request_repaint_after(Duration::from_millis(100));
+        egui::SidePanel::left("sidebar").resizable(false).exact_width(250.0)
             .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(12.0))
             .show(ctx, |ui| self.sidebar(ui));
         if self.settings_open {
-            egui::SidePanel::right("audio_settings")
-                .resizable(false).exact_width(270.0)
+            egui::SidePanel::right("settings").resizable(false).exact_width(275.0)
                 .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
                 .show(ctx, |ui| self.settings_panel(ui));
         }
@@ -570,30 +455,31 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.disconnect();
+        self.voice.take();
+        self.mesh.take();
         self.settings.volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
-        persist_settings(&self.settings);
+        save_settings(&self.settings);
     }
 }
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1120.0, 710.0])
-            .with_min_inner_size([810.0, 500.0]),
+            .with_inner_size([1100.0, 720.0])
+            .with_min_inner_size([830.0, 500.0]),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.2", options, Box::new(|cc| {
-        let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = BACKGROUND;
-        visuals.window_fill = BACKGROUND;
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(43, 47, 63);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(65, 69, 93);
-        cc.egui_ctx.set_visuals(visuals);
+    eframe::run_native("Friends Voice 0.3 — P2P", options, Box::new(|cc| {
+        let mut visual = egui::Visuals::dark();
+        visual.panel_fill = BACKGROUND;
+        visual.window_fill = BACKGROUND;
+        visual.widgets.inactive.bg_fill = Color32::from_rgb(43, 47, 63);
+        visual.widgets.hovered.bg_fill = Color32::from_rgb(63, 68, 91);
+        cc.egui_ctx.set_visuals(visual);
         cc.egui_ctx.style_mut(|style| {
             style.spacing.item_spacing = egui::vec2(8.0, 8.0);
             style.spacing.button_padding = egui::vec2(12.0, 7.0);
         });
-        Ok(Box::new(App::default()))
+        Ok(Box::new(FriendsApp::default()))
     }))
 }
