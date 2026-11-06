@@ -3,13 +3,13 @@
 use super::*;
 use eframe::egui::{self, Align2, FontId, Pos2, Rect, Response, RichText, Rounding, Sense, Stroke, Ui, Vec2};
 
-const SURFACE: Color32 = Color32::from_rgb(27, 30, 49);
-const SURFACE_2: Color32 = Color32::from_rgb(34, 38, 62);
-const BORDER: Color32 = Color32::from_rgb(66, 71, 111);
-const BRIGHT: Color32 = Color32::from_rgb(239, 243, 255);
-const PURPLE: Color32 = Color32::from_rgb(139, 93, 255);
-const BLUE: Color32 = Color32::from_rgb(60, 183, 255);
-const SOFT: Color32 = Color32::from_rgb(184, 192, 220);
+const SURFACE: Color32 = Color32::from_rgb(22, 27, 46);
+const SURFACE_2: Color32 = Color32::from_rgb(31, 38, 64);
+const BORDER: Color32 = Color32::from_rgb(56, 70, 100);
+const BRIGHT: Color32 = Color32::from_rgb(241, 246, 255);
+const PURPLE: Color32 = Color32::from_rgb(148, 108, 250);
+const BLUE: Color32 = Color32::from_rgb(76, 199, 244);
+const SOFT: Color32 = Color32::from_rgb(181, 193, 216);
 
 #[derive(Clone, Copy)]
 enum Glyph {
@@ -20,14 +20,14 @@ fn card() -> egui::Frame {
     egui::Frame::none()
         .fill(SURFACE)
         .stroke(Stroke::new(1.0, BORDER.linear_multiply(0.7)))
-        .rounding(Rounding::same(15.0))
-        .inner_margin(egui::Margin::same(14.0))
+        .rounding(Rounding::same(18.0))
+        .inner_margin(egui::Margin::same(15.0))
 }
 fn soft_card() -> egui::Frame {
     egui::Frame::none()
         .fill(SURFACE_2)
-        .rounding(Rounding::same(12.0))
-        .inner_margin(egui::Margin::same(11.0))
+        .rounding(Rounding::same(14.0))
+        .inner_margin(egui::Margin::same(12.0))
 }
 fn text_title(text: impl Into<String>) -> RichText {
     RichText::new(text).size(18.0).strong().color(BRIGHT)
@@ -36,9 +36,9 @@ fn text_caption(text: impl Into<String>) -> RichText {
     RichText::new(text).size(11.0).color(MUTED)
 }
 fn section(ui: &mut Ui, title: &str) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(title).size(11.0).strong().color(SOFT));
-    ui.add_space(4.0);
+    ui.add_space(7.0);
+    ui.label(RichText::new(title).size(10.5).strong().color(Color32::from_rgb(151, 166, 202)));
+    ui.add_space(5.0);
 }
 fn tinted_button(ui: &mut Ui, label: &str, accent: Color32, enabled: bool, height: f32) -> Response {
     ui.add_enabled(
@@ -46,7 +46,7 @@ fn tinted_button(ui: &mut Ui, label: &str, accent: Color32, enabled: bool, heigh
         egui::Button::new(RichText::new(label).color(BRIGHT).strong().size(13.0))
             .fill(accent)
             .stroke(Stroke::new(1.0, accent.linear_multiply(1.3)))
-            .rounding(Rounding::same(11.0))
+            .rounding(Rounding::same(12.0))
             .min_size(Vec2::new(ui.available_width(), height))
     )
 }
@@ -62,8 +62,8 @@ fn small_chip(ui: &mut Ui, text: &str, color: Color32) {
     egui::Frame::none()
         .fill(color.linear_multiply(0.20))
         .stroke(Stroke::new(1.0, color.linear_multiply(0.64)))
-        .rounding(Rounding::same(12.0))
-        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+        .rounding(Rounding::same(15.0))
+        .inner_margin(egui::Margin::symmetric(11.0, 5.0))
         .show(ui, |ui| {
             ui.label(RichText::new(text).size(11.0).color(color));
         });
@@ -214,75 +214,147 @@ fn peer_color(idx: usize) -> Color32 {
 fn bubble_chat(ui: &mut Ui, msg: &ChatEntry, mine: bool) {
     if msg.system {
         egui::Frame::none()
-            .fill(Color32::from_rgb(35,41,63))
-            .rounding(Rounding::same(9.0))
-            .inner_margin(egui::Margin::symmetric(11.0,7.0))
+            .fill(Color32::from_rgb(29, 43, 65))
+            .stroke(Stroke::new(0.6, Color32::from_rgb(48, 75, 105)))
+            .rounding(Rounding::same(10.0))
+            .inner_margin(egui::Margin::symmetric(11.0, 8.0))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    dot(ui,BLUE,2.2);
-                    ui.label(RichText::new(&msg.text).size(12.0).color(SOFT));
+                    dot(ui, BLUE, 2.4);
+                    ui.label(RichText::new(&msg.text).size(11.5).color(SOFT));
                 });
             });
         return;
     }
     ui.horizontal(|ui| {
-        avatar(ui,&msg.name,36.0,if mine {PURPLE} else {BLUE});
+        avatar(ui, &msg.name, 34.0, if mine {PURPLE} else {BLUE});
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&msg.name).color(if mine {Color32::from_rgb(193,169,255)} else {BRIGHT})
-                    .strong().size(13.0));
-                if mine {ui.label(text_caption("ти"));}
+                ui.label(RichText::new(&msg.name)
+                    .color(if mine {Color32::from_rgb(189, 163, 255)} else {BRIGHT})
+                    .strong().size(12.5));
+                if mine {
+                    small_chip(ui,"ТИ",PURPLE);
+                }
             });
-            ui.label(RichText::new(&msg.text).color(BRIGHT).size(13.0));
+            egui::Frame::none()
+                .fill(if mine {Color32::from_rgb(51, 44, 82)}
+                      else {Color32::from_rgb(35, 43, 68)})
+                .rounding(Rounding::same(10.0))
+                .inner_margin(egui::Margin::symmetric(11.0, 8.0))
+                .show(ui,|ui| {
+                    ui.add(egui::Label::new(RichText::new(&msg.text)
+                        .color(BRIGHT).size(12.7)).wrap());
+                });
         });
     });
 }
-fn peer_tile(ui: &mut Ui, width: f32, height: f32, name: &str, status: &str, color: Color32, active: bool, placeholder: bool, video: Option<&egui::TextureHandle>) {
-    let (r, _) = ui.allocate_exact_size(Vec2::new(width,height),Sense::hover());
-    let painter=ui.painter_at(r);
-    painter.rect_filled(r,Rounding::same(16.0),Color32::from_rgb(32,35,61));
-    // Layered lights create a GPU-friendly glow without external images.
-    for i in (1..=8).rev() {
-        painter.circle_filled(Pos2::new(r.right()-8.0,r.top()+4.0),i as f32*24.0,
-            color.linear_multiply(0.016));
+
+/// Camera tiles: cover-fit live video, animated-looking soft gradients rendered
+/// directly in the native egui painter, speaking ring, top badge and footer.
+fn peer_tile(
+    ui: &mut Ui, width: f32, height: f32,
+    name: &str, status: &str, color: Color32,
+    speaking: bool, placeholder: bool, video: Option<&egui::TextureHandle>,
+) {
+    let (r, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let p = ui.painter_at(r);
+    let rounded = Rounding::same(17.0);
+    p.rect_filled(r, rounded, Color32::from_rgb(23, 30, 52));
+
+    // Color-light panels and horizontal accents have no texture allocations.
+    let c1 = Pos2::new(r.right() - 15.0, r.top() + 8.0);
+    let c2 = Pos2::new(r.left() + 11.0, r.bottom() - 29.0);
+    for i in (1..=7).rev() {
+        let radius = i as f32 * 28.0;
+        p.circle_filled(c1, radius, color.linear_multiply(0.017));
+        p.circle_filled(c2, radius * 0.85, BLUE.linear_multiply(0.011));
     }
-    for i in (1..=5).rev() {
-        painter.circle_filled(Pos2::new(r.left()+3.0,r.bottom()-5.0),i as f32*26.0,
-            BLUE.linear_multiply(0.013));
-    }
+    p.line_segment(
+        [Pos2::new(r.left()+18.0,r.top()+18.0),
+         Pos2::new(r.right()-18.0,r.top()+18.0)],
+        Stroke::new(1.0, color.linear_multiply(0.22)));
+
     if let Some(frame) = video {
-        painter.image(frame.id(), r.shrink(1.3),
-            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
-            Color32::WHITE);
+        // Preserve the camera's 16:9 aspect ratio and center-crop rather than stretch.
+        let aspect = (width / height).max(0.01);
+        let uv = if aspect < 16.0 / 9.0 {
+            let visible = (aspect / (16.0/9.0)).clamp(0.01, 1.0);
+            Rect::from_min_max(Pos2::new((1.0-visible)*0.5,0.0),
+                               Pos2::new((1.0+visible)*0.5,1.0))
+        } else {
+            let visible = ((16.0/9.0) / aspect).clamp(0.01,1.0);
+            Rect::from_min_max(Pos2::new(0.0,(1.0-visible)*0.5),
+                               Pos2::new(1.0,(1.0+visible)*0.5))
+        };
+        p.image(frame.id(), r.shrink(1.0), uv, Color32::WHITE);
+    } else if placeholder {
+        let center = Pos2::new(r.center().x,r.center().y-16.0);
+        p.circle_filled(center, 27.0, Color32::from_rgb(35,45,74));
+        p.circle_stroke(center, 26.0, Stroke::new(1.0,BORDER));
+        p.text(center, Align2::CENTER_CENTER, "+",
+            FontId::proportional(32.0),SOFT);
+        p.text(Pos2::new(center.x,center.y+47.0),
+            Align2::CENTER_CENTER,"Місце для друга",
+            FontId::proportional(12.5),BRIGHT);
+    } else {
+        let center = Pos2::new(r.center().x,r.center().y-12.0);
+        p.circle_filled(center, 43.0, color.linear_multiply(0.20));
+        p.circle_stroke(center, 40.0, Stroke::new(1.2,color.linear_multiply(0.7)));
+        p.circle_filled(center, 31.0, color.linear_multiply(0.16));
+        p.text(center,Align2::CENTER_CENTER,
+            name.chars().take(2).collect::<String>().to_uppercase(),
+            FontId::proportional(28.0), BRIGHT);
     }
-    painter.rect_stroke(r,Rounding::same(16.0),
-        Stroke::new(if active {1.8} else {1.0},if active {GREEN} else {BORDER}));
-    if placeholder {
-        let c=Pos2::new(r.center().x, r.center().y-15.0);
-        painter.circle_stroke(c,24.0,Stroke::new(1.2,MUTED.linear_multiply(0.45)));
-        painter.text(c,Align2::CENTER_CENTER,"+",FontId::proportional(35.0),MUTED);
-        painter.text(Pos2::new(r.center().x,r.bottom()-37.0),
-            Align2::CENTER_CENTER,"Очікуємо друга",FontId::proportional(12.0),SOFT);
-        painter.text(Pos2::new(r.center().x,r.bottom()-19.0),
-            Align2::CENTER_CENTER,"P2P • Radmin VPN",FontId::proportional(10.0),MUTED);
-        return;
+
+    if !placeholder {
+        let bar = Rect::from_min_max(
+            Pos2::new(r.left()+1.0,r.bottom()-52.0),
+            Pos2::new(r.right()-1.0,r.bottom()-1.0),
+        );
+        p.rect_filled(bar,Rounding::same(13.0),
+            Color32::from_rgba_unmultiplied(11,17,31,235));
+        p.circle_filled(Pos2::new(r.left()+17.0,r.bottom()-27.0),4.0,
+            if speaking {GREEN} else {color});
+        p.text(Pos2::new(r.left()+28.0,r.bottom()-33.0),
+            Align2::LEFT_TOP,
+            if name.chars().count() > 23 {
+                format!("{}…",name.chars().take(22).collect::<String>())
+            } else { name.to_string() },
+            FontId::proportional(13.0),BRIGHT);
+        p.text(Pos2::new(r.left()+28.0,r.bottom()-14.0),
+            Align2::LEFT_CENTER, status,FontId::proportional(10.5),SOFT);
+
+        // Top right live badge.
+        if video.is_some() {
+            let badge = Rect::from_min_size(
+                Pos2::new(r.right()-72.0,r.top()+12.0), Vec2::new(58.0,24.0));
+            p.rect_filled(badge,Rounding::same(11.0),
+                Color32::from_rgba_unmultiplied(14,31,35,220));
+            p.circle_filled(Pos2::new(badge.left()+11.0,badge.center().y),3.0,GREEN);
+            p.text(Pos2::new(badge.left()+20.0,badge.center().y),
+                Align2::LEFT_CENTER,"LIVE",FontId::proportional(10.5),BRIGHT);
+        }
+        if speaking {
+            let center = Pos2::new(r.right()-19.0,r.bottom()-27.0);
+            for (x,h) in [(-6.0,9.0),(0.0,17.0),(6.0,12.0)] {
+                p.line_segment(
+                    [Pos2::new(center.x+x,center.y-h*0.5),
+                     Pos2::new(center.x+x,center.y+h*0.5)],
+                    Stroke::new(2.3,GREEN));
+            }
+        }
+    } else {
+        p.text(Pos2::new(r.center().x,r.bottom()-20.0),
+            Align2::CENTER_CENTER,"P2P · FRIENDS VOICE",
+            FontId::proportional(10.0),MUTED);
     }
-    if video.is_none() {
-        let avatar_center=Pos2::new(r.center().x,r.center().y-13.0);
-        painter.circle_filled(avatar_center,36.0,color.linear_multiply(0.25));
-        painter.circle_stroke(avatar_center,36.0,Stroke::new(1.7,color));
-        let initials=name.chars().take(2).collect::<String>().to_uppercase();
-        painter.text(avatar_center,Align2::CENTER_CENTER,initials,FontId::proportional(25.0),BRIGHT);
-    }
-    painter.rect_filled(Rect::from_min_max(
-        Pos2::new(r.left()+1.0,r.bottom()-47.0),Pos2::new(r.right()-1.0,r.bottom()-1.0)),
-        Rounding::same(10.0),Color32::from_rgba_unmultiplied(11,13,27,222));
-    painter.circle_filled(Pos2::new(r.left()+16.0,r.bottom()-25.0),4.0,if active {GREEN} else {MUTED});
-    painter.text(Pos2::new(r.left()+29.0,r.bottom()-30.0),
-        Align2::LEFT_TOP,name,FontId::proportional(13.0),BRIGHT);
-    painter.text(Pos2::new(r.left()+29.0,r.bottom()-14.0),
-        Align2::LEFT_CENTER,status,FontId::proportional(10.5),SOFT);
+
+    p.rect_stroke(r,rounded,
+        Stroke::new(if speaking {2.3} else if response.hovered() {1.6}else{1.0},
+            if speaking {GREEN} else if response.hovered() {color}else{BORDER}));
 }
+
 impl FriendsApp {
     pub(super) fn neon_sidebar(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false,false]).show(ui, |ui| {
