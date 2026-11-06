@@ -51,6 +51,7 @@ struct Assembly {
     parts: Vec<Option<Vec<u8>>>,
     /// One XOR parity fragment can reconstruct one missing UDP packet.
     parity: Option<(usize, Vec<u8>)>,
+    recovered: bool,
     updated: Instant,
 }
 impl Assembly {
@@ -59,6 +60,7 @@ impl Assembly {
             seq,
             parts: vec![None; total],
             parity: None,
+            recovered: false,
             updated: Instant::now(),
         }
     }
@@ -94,6 +96,7 @@ impl Assembly {
                 } else { CHUNK };
                 recovered.truncate(expected);
                 self.parts[index] = Some(recovered);
+                self.recovered = true;
             }
         }
         if self.parts.iter().any(Option::is_none) { return None; }
@@ -278,6 +281,7 @@ pub struct VideoSession {
     quality: Arc<AtomicU32>,
     pub frames_sent: Arc<AtomicU64>,
     pub frames_received: Arc<AtomicU64>,
+    pub frames_recovered: Arc<AtomicU64>,
 }
 impl VideoSession {
     pub fn start(id: u64, peers: Arc<Mutex<Vec<Ipv4Addr>>>,
@@ -293,6 +297,8 @@ impl VideoSession {
         let valid_peers = Arc::clone(&peers);
         let frames_received = Arc::new(AtomicU64::new(0));
         let rx_count = Arc::clone(&frames_received);
+        let frames_recovered = Arc::new(AtomicU64::new(0));
+        let recovered_count = Arc::clone(&frames_recovered);
         let worker = thread::spawn(move || {
             let mut packets = [0u8; 1500];
             let mut partial: HashMap<IpAddr, Assembly> = HashMap::new();
@@ -316,8 +322,12 @@ impl VideoSession {
                             *entry = Assembly::new(seq, total);
                         }
                         if let Some(jpeg) = entry.insert(part, payload) {
+                            let was_recovered = entry.recovered;
                             partial.remove(&source.ip());
                             if let Some(frame) = decode_jpeg(id, &jpeg) {
+                                if was_recovered {
+                                    recovered_count.fetch_add(1, Ordering::Relaxed);
+                                }
                                 completed.insert(source.ip(), (id, seq, Instant::now()));
                                 if tx.try_send(VideoEvent::Frame(frame)).is_ok() {
                                     rx_count.fetch_add(1, Ordering::Relaxed);
@@ -346,6 +356,7 @@ impl VideoSession {
             camera_index, quality,
             frames_sent: Arc::new(AtomicU64::new(0)),
             frames_received,
+            frames_recovered,
         })
     }
     pub fn enabled(&self) -> bool { self.active.load(Ordering::Relaxed) }
@@ -429,6 +440,7 @@ mod tests {
                     reconstructed = Some(bytes);
                 }
             }
+            assert!(assembly.recovered, "parity not used for fragment {dropped}");
             assert_eq!(reconstructed, Some(jpg.clone()), "missing fragment {dropped}");
         }
     }
