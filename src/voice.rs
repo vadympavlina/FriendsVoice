@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -80,6 +80,8 @@ pub struct VoiceSession {
     pub packets_sent: Arc<AtomicU64>,
     pub packets_received: Arc<AtomicU64>,
     pub udp_errors: Arc<AtomicU64>,
+    /// Independent session volume for each known user (0..=2).
+    pub per_peer_volumes: Arc<Mutex<HashMap<u64, f32>>>,
 }
 
 impl Drop for VoiceSession {
@@ -195,6 +197,7 @@ impl VoiceSession {
         let udp_errors = Arc::new(AtomicU64::new(0));
         let samples = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let playback = Arc::new(Mutex::new(HashMap::<u64, SpeakerBuffer>::new()));
+        let per_peer_volumes = Arc::new(Mutex::new(HashMap::<u64, f32>::new()));
 
         let capture_samples = Arc::clone(&samples);
         let capture_level = Arc::clone(&level);
@@ -226,6 +229,7 @@ impl VoiceSession {
         let play_samples = Arc::clone(&playback);
         let play_deafened = Arc::clone(&deafened);
         let play_volume = Arc::clone(&volume);
+        let play_peer_volumes = Arc::clone(&per_peer_volumes);
         let output_stream = output.build_output_stream(
             &out_config,
             move |data: &mut [f32], _| {
@@ -235,10 +239,14 @@ impl VoiceSession {
                 };
                 let volume = f32::from_bits(play_volume.load(Ordering::Relaxed)).clamp(0.0, 2.0);
                 let muted = play_deafened.load(Ordering::Relaxed);
+                // One lock per callback, never per sample, keeps the realtime audio path light.
+                let peer_gains = play_peer_volumes.lock().ok();
                 for frame in data.chunks_mut(out_channels) {
                     let mut mixed = 0f32;
-                    for speaker in speakers.values_mut() {
-                        mixed += speaker.next();
+                    for (id, speaker) in speakers.iter_mut() {
+                        let gain = peer_gains.as_ref().and_then(|vols| vols.get(id).copied())
+                            .unwrap_or(1.0).clamp(0.0, 2.0);
+                        mixed += speaker.next() * gain;
                     }
                     let sample = if muted { 0.0 } else { (mixed * volume).clamp(-1.0, 1.0) };
                     frame.fill(sample);
@@ -314,6 +322,8 @@ impl VoiceSession {
         let error_count = Arc::clone(&udp_errors);
         let receive_worker = thread::spawn(move || {
             let mut decoders: HashMap<u64, Decoder> = HashMap::new();
+            let mut last_audio: HashMap<u64, Instant> = HashMap::new();
+            let mut last_cleanup = Instant::now();
             let mut input = [0u8; 1500];
             let mut decoded = [0f32; 5760];
             while !stop_recv.load(Ordering::Relaxed) {
@@ -337,6 +347,7 @@ impl VoiceSession {
                             if let Ok(mut speakers) = playback.lock() {
                                 speakers.entry(id).or_default().add(&decoded[..samples]);
                                 receive_count.fetch_add(1, Ordering::Relaxed);
+                                last_audio.insert(id, Instant::now());
                             }
                         }
                     }
@@ -354,6 +365,16 @@ impl VoiceSession {
                         thread::sleep(Duration::from_millis(80));
                     },
                 }
+                // A user who disappears should not leave an Opus decoder and jitter buffer
+                // in memory for the rest of a long-running room session.
+                if last_cleanup.elapsed() >= Duration::from_secs(5) {
+                    last_audio.retain(|_, t| t.elapsed() < Duration::from_secs(10));
+                    decoders.retain(|id, _| last_audio.contains_key(id));
+                    if let Ok(mut speakers) = playback.lock() {
+                        speakers.retain(|id, _| last_audio.contains_key(id));
+                    }
+                    last_cleanup = Instant::now();
+                }
             }
         });
         Ok(Self {
@@ -367,6 +388,7 @@ impl VoiceSession {
             packets_sent,
             packets_received,
             udp_errors,
+            per_peer_volumes,
         })
     }
 }
