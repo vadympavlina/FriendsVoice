@@ -1,68 +1,54 @@
-//! Window / taskbar icon, rendered into RGBA pixels (no external image files).
-//!
-//! The mark is two overlapping circles: two friends in one room. The overlap
-//! is the amber lens that also appears next to the wordmark in the sidebar.
-pub fn icon() -> eframe::egui::IconData {
-    const SIDE: u32 = 128;
-    let tile = [24.0f32, 25.0, 29.0];
-    let paper = [236.0f32, 235.0, 231.0];
-    let amber = [240.0f32, 177.0, 74.0];
-    let (left, right) = ((46.0f32, 64.0f32), (82.0f32, 64.0f32));
-    let radius = 27.0f32;
-    let ring = 4.5f32;
+//! Window / taskbar icon and the in-app logo, decoded from the embedded mascot PNGs.
+use eframe::egui;
 
-    // Signed distance helpers return coverage in 0..=1 with ~1px anti-aliasing.
-    let coverage = |d: f32| (0.5 - d).clamp(0.0, 1.0);
-    let mut rgba = Vec::with_capacity((SIDE * SIDE * 4) as usize);
-    for y in 0..SIDE {
-        for x in 0..SIDE {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+const WINDOW_ICON: &[u8] = include_bytes!("../assets/icon-256.png");
+const LOGO_SMALL: &[u8] = include_bytes!("../assets/icon-48.png");
+const LOGO_LARGE: &[u8] = include_bytes!("../assets/icon-96.png");
 
-            // Rounded-square tile.
-            let dx = (fx - 64.0).abs() - (58.0 - 26.0);
-            let dy = (fy - 64.0).abs() - (58.0 - 26.0);
-            let tile_d = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt()
-                + dx.max(dy).min(0.0)
-                - 26.0;
-            let alpha = coverage(tile_d);
-            if alpha <= 0.0 {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-                continue;
-            }
+fn decode(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    Some((image.into_raw(), width, height))
+}
 
-            let dist_l = ((fx - left.0).powi(2) + (fy - left.1).powi(2)).sqrt() - radius;
-            let dist_r = ((fx - right.0).powi(2) + (fy - right.1).powi(2)).sqrt() - radius;
-            let mut rgb = tile;
-            let mix = |rgb: &mut [f32; 3], tone: [f32; 3], k: f32| {
-                for c in 0..3 {
-                    rgb[c] = rgb[c] * (1.0 - k) + tone[c] * k;
-                }
-            };
-            // Lens: inside both circles.
-            mix(&mut rgb, amber, coverage(dist_l.max(dist_r)));
-            // Outlines of both circles.
-            mix(&mut rgb, paper, coverage(dist_l.abs() - ring * 0.5));
-            mix(&mut rgb, paper, coverage(dist_r.abs() - ring * 0.5));
+pub fn icon() -> egui::IconData {
+    match decode(WINDOW_ICON) {
+        Some((rgba, width, height)) => egui::IconData { rgba, width, height },
+        None => egui::IconData { rgba: vec![0; 4], width: 1, height: 1 },
+    }
+}
 
-            rgba.extend_from_slice(&[
-                rgb[0].clamp(0.0, 255.0) as u8,
-                rgb[1].clamp(0.0, 255.0) as u8,
-                rgb[2].clamp(0.0, 255.0) as u8,
-                (alpha * 255.0) as u8,
-            ]);
+/// Uploads the logo textures once; the UI looks them up by name.
+pub fn install_logo_textures(ctx: &egui::Context) {
+    for (name, bytes) in [("logo-small", LOGO_SMALL), ("logo-large", LOGO_LARGE)] {
+        if let Some((rgba, width, height)) = decode(bytes) {
+            let image = egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
+            let texture = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new(name), texture));
         }
     }
-    eframe::egui::IconData { rgba, width: SIDE, height: SIDE }
+}
+
+pub fn logo_texture(ctx: &egui::Context, large: bool) -> Option<egui::TextureHandle> {
+    let name = if large { "logo-large" } else { "logo-small" };
+    ctx.data(|data| data.get_temp::<egui::TextureHandle>(egui::Id::new(name)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn icon_has_alpha_and_valid_dimensions() {
+    fn window_icon_is_square_with_transparent_corners_and_opaque_centre() {
         let image = icon();
-        assert_eq!(image.rgba.len(), 128 * 128 * 4);
+        assert_eq!((image.width, image.height), (256, 256));
+        assert_eq!(image.rgba.len(), 256 * 256 * 4);
         assert_eq!(image.rgba[3], 0, "corner must be transparent");
-        assert_eq!(image.rgba[((64 * 128 + 64) * 4 + 3) as usize], 255);
+        let centre = ((128 * 256 + 128) * 4 + 3) as usize;
+        assert!(image.rgba[centre] >= 240, "mascot body must be (nearly) opaque");
+    }
+    #[test]
+    fn logo_pngs_decode() {
+        assert!(decode(LOGO_SMALL).is_some());
+        assert!(decode(LOGO_LARGE).is_some());
     }
 }

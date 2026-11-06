@@ -20,6 +20,10 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # The H.264 codec (OpenH264) compiles its assembly with NASM.
+      - name: Set up NASM
+        uses: ilammy/setup-nasm@v1
+
       - name: Set up Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -2,7 +2,7 @@
 //! channel rail on the left, call stage in the middle, text chat on the right.
 //!
 //! Design rules: flat surfaces separated by tone (not borders or cards), one
-//! amber accent used only for primary actions, green only for "speaking /
+//! violet accent (taken from the mascot) used only for primary actions, green only for "speaking /
 //! online", red only for destructive or muted states, sentence-case text.
 use super::*;
 use eframe::egui::{
@@ -24,8 +24,10 @@ const LINE: Color32 = Color32::from_rgb(40, 41, 46);
 const TEXT: Color32 = Color32::from_rgb(236, 235, 231);
 const TEXT2: Color32 = Color32::from_rgb(170, 171, 178);
 const TEXT3: Color32 = Color32::from_rgb(128, 129, 138);
-const AMBER: Color32 = Color32::from_rgb(240, 177, 74);
-const AMBER_INK: Color32 = Color32::from_rgb(34, 23, 5);
+const ACCENT: Color32 = Color32::from_rgb(158, 128, 252);
+/// Warnings (not the brand accent).
+const WARN: Color32 = Color32::from_rgb(240, 177, 74);
+const ACCENT_INK: Color32 = Color32::from_rgb(24, 14, 52);
 const GREEN: Color32 = Color32::from_rgb(79, 209, 139);
 const RED: Color32 = Color32::from_rgb(226, 84, 92);
 
@@ -68,6 +70,7 @@ pub fn install_theme(ctx: &egui::Context) {
         vec!["plex-semibold".into(), "plex".into(), "phosphor".into()],
     );
     ctx.set_fonts(fonts);
+    branding::install_logo_textures(ctx);
 
     let mut v = egui::Visuals::dark();
     v.panel_fill = STAGE;
@@ -80,8 +83,8 @@ pub fn install_theme(ctx: &egui::Context) {
     v.window_shadow = egui::Shadow { offset: Vec2::new(0.0, 8.0), blur: 24.0, spread: 0.0,
         color: Color32::from_black_alpha(110) };
     v.popup_shadow = v.window_shadow;
-    v.hyperlink_color = AMBER;
-    v.selection.bg_fill = Color32::from_rgb(112, 84, 34);
+    v.hyperlink_color = ACCENT;
+    v.selection.bg_fill = Color32::from_rgb(86, 66, 150);
     v.selection.stroke = Stroke::new(1.0_f32, TEXT);
     v.slider_trailing_fill = true;
     let radius = Rounding::same(8.0);
@@ -180,7 +183,7 @@ fn icon_button(ui: &mut Ui, glyph: &str, tip: &str, active: bool, side: f32) -> 
         ui.painter().rect_filled(rect, Rounding::same(8.0), if active { RAISED } else { HOVER });
     }
     if resp.has_focus() {
-        ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.5_f32, AMBER));
+        ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.5_f32, ACCENT));
     }
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph,
         FontId::proportional(side * 0.56), if active || resp.hovered() { TEXT } else { TEXT2 });
@@ -201,7 +204,7 @@ fn round_button(ui: &mut Ui, glyph: &str, tip: &str, fill: Color32, fg: Color32,
     };
     ui.painter().circle_filled(rect.center(), d * 0.5, fill);
     if resp.has_focus() {
-        ui.painter().circle_stroke(rect.center(), d * 0.5 + 2.0, Stroke::new(1.5_f32, AMBER));
+        ui.painter().circle_stroke(rect.center(), d * 0.5 + 2.0, Stroke::new(1.5_f32, ACCENT));
     }
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph,
         FontId::proportional(d * 0.46), fg);
@@ -218,7 +221,7 @@ fn pill_button(ui: &mut Ui, label: &str, fill: Color32, fg: Color32, size: Vec2,
     ).clicked()
 }
 fn primary_button(ui: &mut Ui, label: &str, enabled: bool) -> bool {
-    pill_button(ui, label, AMBER, AMBER_INK, Vec2::new(0.0, 34.0), enabled)
+    pill_button(ui, label, ACCENT, ACCENT_INK, Vec2::new(0.0, 34.0), enabled)
 }
 fn quiet_button(ui: &mut Ui, label: &str) -> bool {
     pill_button(ui, label, RAISED, TEXT, Vec2::new(0.0, 34.0), true)
@@ -234,7 +237,7 @@ fn nav_row(ui: &mut Ui, glyph: &str, label: &str, selected: bool, enabled: bool,
         ui.painter().rect_filled(rect, Rounding::same(6.0), if selected { RAISED } else { HOVER.linear_multiply(0.6) });
     }
     if resp.has_focus() {
-        ui.painter().rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.5_f32, AMBER));
+        ui.painter().rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.5_f32, ACCENT));
     }
     let color = if !enabled { TEXT3 } else if selected || resp.hovered() { TEXT } else { TEXT2 };
     ui.painter().text(Pos2::new(rect.left() + 18.0, rect.center().y), Align2::CENTER_CENTER,
@@ -245,9 +248,9 @@ fn nav_row(ui: &mut Ui, glyph: &str, label: &str, selected: bool, enabled: bool,
         let label = if badge > 99 { "99+".to_string() } else { badge.to_string() };
         let badge_rect = Rect::from_center_size(
             Pos2::new(rect.right() - 16.0, rect.center().y), Vec2::new(24.0, 18.0));
-        ui.painter().rect_filled(badge_rect, Rounding::same(9.0), AMBER);
+        ui.painter().rect_filled(badge_rect, Rounding::same(9.0), ACCENT);
         ui.painter().text(badge_rect.center(), Align2::CENTER_CENTER, label,
-            semibold(11.5), AMBER_INK);
+            semibold(11.5), ACCENT_INK);
     }
     resp
 }
@@ -308,30 +311,19 @@ fn level_bar(ui: &mut Ui, level: f32, width: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 8.0), Sense::hover());
     ui.painter().rect_filled(rect, Rounding::same(4.0), RAISED);
     let fill = Rect::from_min_size(rect.min, Vec2::new(rect.width() * level.clamp(0.0, 1.0), rect.height()));
-    ui.painter().rect_filled(fill, Rounding::same(4.0), if level > 0.85 { AMBER } else { GREEN });
+    ui.painter().rect_filled(fill, Rounding::same(4.0), if level > 0.85 { WARN } else { GREEN });
 }
 
+/// The mascot logo. Falls back to a plain accent circle if the texture is missing.
 fn brand_mark(ui: &mut Ui, side: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
-    let r = side * 0.3;
-    let offset = side * 0.17;
-    let (left, right) = (Pos2::new(rect.center().x - offset, rect.center().y),
-                         Pos2::new(rect.center().x + offset, rect.center().y));
-    // Lens = intersection of the two circles.
-    let half = (offset / r).clamp(0.0, 1.0).acos();
-    let mut points = Vec::new();
-    for i in 0..=24 {
-        let a = -half + 2.0 * half * i as f32 / 24.0;
-        points.push(Pos2::new(left.x + r * a.cos(), left.y + r * a.sin()));
+    match branding::logo_texture(ui.ctx(), side > 40.0) {
+        Some(texture) => {
+            ui.painter().image(texture.id(), rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+        None => { ui.painter().circle_filled(rect.center(), side * 0.45, ACCENT); }
     }
-    for i in (0..=24).rev() {
-        let a = -half + 2.0 * half * i as f32 / 24.0;
-        points.push(Pos2::new(right.x - r * a.cos(), right.y + r * a.sin()));
-    }
-    ui.painter().add(egui::Shape::convex_polygon(points, AMBER, Stroke::NONE));
-    let ring = Stroke::new(side * 0.075, TEXT);
-    ui.painter().circle_stroke(left, r, ring);
-    ui.painter().circle_stroke(right, r, ring);
 }
 
 // ── Call grid ──────────────────────────────────────────────────────────────
@@ -531,7 +523,7 @@ impl FriendsApp {
                         let outdated = peer.protocol != PROTOCOL_VERSION;
                         person_row(ui, 18.0, &peer.name,
                             outdated.then_some(("Потрібне оновлення", RED)), speaking,
-                            self.video_textures.contains_key(&peer.id).then_some(ph::VIDEO_CAMERA));
+                            self.video_textures.contains_key(&(peer.id, StreamKind::Camera)).then_some(ph::VIDEO_CAMERA));
                     }
                     if nav_row(ui, ph::HASH, "Чат", !self.focus_mode, true, self.chat_unread).clicked() {
                         self.focus_mode = false;
@@ -776,7 +768,7 @@ impl FriendsApp {
             let rect = Rect::from_min_size(
                 Pos2::new(left + column as f32 * (tile_w + gap), top + row as f32 * (tile_h + gap)),
                 Vec2::new(tile_w, tile_h));
-            let texture = entry.id.and_then(|id| self.video_textures.get(&id));
+            let texture = entry.id.and_then(|id| self.video_textures.get(&(id, StreamKind::Camera)));
             paint_tile(ui, rect, &entry.name, entry.note, entry.speaking, texture, entry.badge);
         }
         if alone {
@@ -821,8 +813,8 @@ impl FriendsApp {
                 if round_button(ui, if camera { ph::VIDEO_CAMERA } else { ph::VIDEO_CAMERA_SLASH },
                     if camera_starting { "Камера запускається. Натисни, щоб скасувати." }
                         else if camera { "Вимкнути камеру" } else { "Увімкнути камеру" },
-                    if camera_starting { AMBER } else if camera { TEXT } else { RAISED },
-                    if camera_starting { AMBER_INK } else if camera { STAGE } else { TEXT },
+                    if camera_starting { ACCENT } else if camera { TEXT } else { RAISED },
+                    if camera_starting { ACCENT_INK } else if camera { STAGE } else { TEXT },
                     self.mesh.is_some(), d) {
                     self.toggle_camera();
                 }
@@ -832,7 +824,7 @@ impl FriendsApp {
                 if pill_button(ui, "Вийти", RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
                     self.toggle_voice();
                 }
-            } else if pill_button(ui, "Приєднатися до голосу", AMBER, AMBER_INK,
+            } else if pill_button(ui, "Приєднатися до голосу", ACCENT, ACCENT_INK,
                 Vec2::new(join_width, d), self.mesh.is_some()) {
                 self.toggle_voice();
             }
@@ -840,8 +832,8 @@ impl FriendsApp {
                 let unread = self.chat_unread;
                 if round_button(ui, ph::CHAT_CIRCLE_TEXT,
                     if unread > 0 { "Відкрити чат · є нові повідомлення" } else { "Відкрити чат" },
-                    if unread > 0 { AMBER } else { RAISED },
-                    if unread > 0 { AMBER_INK } else { TEXT }, true, d) {
+                    if unread > 0 { ACCENT } else { RAISED },
+                    if unread > 0 { ACCENT_INK } else { TEXT }, true, d) {
                     self.focus_mode = false;
                     self.chat_unread = 0;
                 }
@@ -890,9 +882,9 @@ impl FriendsApp {
                         if ready { Sense::click() } else { Sense::hover() });
                     let resp = resp.on_hover_text("Надіслати · Enter");
                     ui.painter().rect_filled(rect, Rounding::same(8.0),
-                        if ready { if resp.hovered() { AMBER.lerp_to_gamma(Color32::WHITE, 0.12) } else { AMBER } } else { RAISED });
+                        if ready { if resp.hovered() { ACCENT.lerp_to_gamma(Color32::WHITE, 0.12) } else { ACCENT } } else { RAISED });
                     ui.painter().text(rect.center(), Align2::CENTER_CENTER, ph::PAPER_PLANE_RIGHT,
-                        FontId::proportional(19.0), if ready { AMBER_INK } else { TEXT3 });
+                        FontId::proportional(19.0), if ready { ACCENT_INK } else { TEXT3 });
                     if ready && resp.clicked() { self.send_chat(); }
                 });
                 if self.draft.chars().count() > 900 {
@@ -1103,9 +1095,9 @@ impl FriendsApp {
         let key = self.ptt_key.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
             if self.ptt_capture.is_some() {
-                egui::Frame::none().fill(RAISED).stroke(Stroke::new(1.5_f32, AMBER))
+                egui::Frame::none().fill(RAISED).stroke(Stroke::new(1.5_f32, ACCENT))
                     .rounding(Rounding::same(8.0)).inner_margin(Margin::symmetric(12.0, 7.0))
-                    .show(ui, |ui| ui.label(text("Натисни клавішу або кнопку миші…", 14.0, AMBER)));
+                    .show(ui, |ui| ui.label(text("Натисни клавішу або кнопку миші…", 14.0, ACCENT)));
                 if quiet_button(ui, "Скасувати") { self.ptt_capture = None; }
             } else {
                 egui::Frame::none().fill(RAISED).rounding(Rounding::same(8.0))
@@ -1177,7 +1169,7 @@ impl FriendsApp {
                 voice.duplicate_packets.load(Ordering::Relaxed)));
             let errors = voice.udp_errors.load(Ordering::Relaxed);
             if errors > 0 {
-                ui.label(text(format!("Попереджень UDP: {errors}"), 12.5, AMBER));
+                ui.label(text(format!("Попереджень UDP: {errors}"), 12.5, WARN));
             }
             if active > 0 && sent > 100 && received == 0 {
                 ui.label(text("Вхідного звуку немає. Перевір, чи відкритий UDP 45889 у друзів.", 12.5, RED));
@@ -1198,7 +1190,7 @@ impl FriendsApp {
         let width = ui.available_width().min(460.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, width / TILE_ASPECT), Sense::hover());
         let local_id = self.mesh.as_ref().map(|m| m.id);
-        let texture = local_id.and_then(|id| self.video_textures.get(&id));
+        let texture = local_id.and_then(|id| self.video_textures.get(&(id, StreamKind::Camera)));
         let note = if starting { Some("запуск камери") } else if !on { Some("камеру вимкнено") } else { None };
         paint_tile(ui, rect, &self.settings.nickname.clone(), note, false, texture, None);
         ui.add_space(8.0);
@@ -1252,21 +1244,27 @@ impl FriendsApp {
         let mut selected = original;
         let label = |q: u32| match q {
             0 => "Економія · 320×180, 6 к/с",
-            2 => "Висока · 640×360, 12 к/с",
+            1 => "Звичайна · 480×270, 10 к/с",
+            2 => "Покращена · 640×360, 12 к/с",
             3 => "HD · 960×540, 15 к/с",
-            _ => "Баланс · 480×270, 10 к/с",
+            4 => "Плавна HD · 1280×720, 30 к/с",
+            _ => "Максимум · 1920×1080, 30 к/с",
         };
         let traffic = |q: u32| match q {
-            0 => "≈0,3 Мбіт/с", 2 => "≈3 Мбіт/с", 3 => "≈6 Мбіт/с", _ => "≈1,2 Мбіт/с",
+            0 => "≈0,3 Мбіт/с", 1 => "≈1,2 Мбіт/с", 2 => "≈3 Мбіт/с", 3 => "≈6 Мбіт/с",
+            4 => "≈3 Мбіт/с", _ => "≈6 Мбіт/с",
         };
-        egui::ComboBox::from_id_salt("fv_video_quality").width(260.0).selected_text(label(original))
+        egui::ComboBox::from_id_salt("fv_video_quality").width(300.0).selected_text(label(original))
             .show_ui(ui, |ui| {
-                for q in 0..4u32 { ui.selectable_value(&mut selected, q, label(q)); }
+                for q in [5u32, 4, 3, 2, 1, 0] { ui.selectable_value(&mut selected, q, label(q)); }
             });
         if selected != original { self.update_video_quality(selected); }
+        let friends = self.peers.iter().filter(|p| p.voice).count().max(1);
         Self::hint(ui, format!(
-            "Трафік у дзвінку на кожного друга: {}. Чим вища якість, тим більше потрібно швидкості відправки. Якщо відео смикається, обери нижчу. Камера підганяється під формат 16:9.",
-            traffic(original)));
+            "Трафік на одного друга: {}. Зараз у дзвінку друзів: {}, тож відправка складе приблизно {} Мбіт/с. Два верхні рівні використовують відеокодек H.264: якість краща за той самий трафік. Усі в дзвінку мають користуватися однією версією програми.",
+            traffic(original), friends,
+            { let one: f32 = match original { 0 => 0.3, 1 => 1.2, 2 | 4 => 3.0, _ => 6.0 };
+              format!("{:.1}", one * friends as f32).replace('.', ",") }));
         if let Some(video) = &self.video {
             ui.add_space(6.0);
             let info = video.diagnostics.format.lock().map(|f| f.clone()).unwrap_or_default();
@@ -1282,7 +1280,7 @@ impl FriendsApp {
             }
             Self::hint(ui, format!("Кадрів: надіслано {}, отримано {}, відновлено після втрат {}",
                 video.frames_sent.load(Ordering::Relaxed),
-                video.frames_received.load(Ordering::Relaxed),
+                video.frames_received.load(Ordering::Relaxed) + video.stream_frames_received(),
                 video.frames_recovered.load(Ordering::Relaxed)));
         }
 
@@ -1351,7 +1349,7 @@ impl FriendsApp {
     fn settings_about(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            brand_mark(ui, 48.0);
+            brand_mark(ui, 72.0);
             ui.vertical(|ui| {
                 ui.label(strong("Friends Voice", 17.0, TEXT));
                 ui.label(text(format!("Версія {}", env!("CARGO_PKG_VERSION")), 12.5, TEXT3));

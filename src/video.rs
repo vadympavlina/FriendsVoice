@@ -2,6 +2,7 @@
 //! Camera is ON ONLY when explicitly enabled by the user. JPEG uses low resolution
 //! and a strict bandwidth cap; this is a beta transport, not a low-latency H.264 stack.
 use crate::protocol::VIDEO_PORT;
+use crate::stream::{fit_size, I420, Scaler, StreamEncoder, StreamHub, StreamKind};
 use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, ExtendedColorType, ImageFormat, RgbImage};
 use nokhwa::{
     pixel_format::RgbFormat,
@@ -31,6 +32,16 @@ fn video_preset(mode: u32) -> (u32, u32, u64, u8) {
         _ => (480, 270, 10, 50), // Balanced (default)
     }
 }
+/// H.264 camera presets (modes 4 and 5): `(width, height, fps, bitrate in bit/s)`.
+fn h264_preset(mode: u32) -> Option<(usize, usize, u32, u32)> {
+    match mode {
+        4 => Some((1280, 720, 30, 3_000_000)),
+        5 => Some((1920, 1080, 30, 6_000_000)),
+        _ => None,
+    }
+}
+/// Resolution requested from the camera for a quality mode.
+fn capture_size(mode: u32) -> (u32, u32) { if mode == 5 { (1920, 1080) } else { (1280, 720) } }
 const MAX_JPEG_BYTES: usize = 72_000;
 const CHUNK: usize = 960;
 const HEADER: usize = 23; // marker + sender u64 + camera session u64 + seq u32 + indexes
@@ -40,9 +51,19 @@ const MAGIC: u8 = 0xF6; // v0.8, requires same version on all peers
 #[derive(Debug)]
 pub struct VideoFrame {
     pub sender_id: u64,
+    pub kind: StreamKind,
     pub width: usize,
     pub height: usize,
-    pub rgb: Vec<u8>,
+    /// Opaque RGBA pixels, ready to become a texture.
+    pub rgba: Vec<u8>,
+}
+
+fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
+    for pixel in rgb.chunks_exact(3) {
+        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+    }
+    rgba
 }
 #[derive(Debug)]
 pub enum VideoEvent {
@@ -170,8 +191,9 @@ fn decode_jpeg(id: u64, data: &[u8]) -> Option<VideoFrame> {
     let image = image::load_from_memory_with_format(data, ImageFormat::Jpeg).ok()?.to_rgb8();
     if !matches!((image.width(), image.height()), (320, 180) | (480, 270) | (640, 360) | (960, 540)) { return None; }
     Some(VideoFrame {
-        sender_id: id, width: image.width() as usize, height: image.height() as usize,
-        rgb: image.into_raw(),
+        sender_id: id, kind: StreamKind::Camera,
+        width: image.width() as usize, height: image.height() as usize,
+        rgba: rgb_to_rgba(image.as_raw()),
     })
 }
 /// Names of the cameras Windows reports, as `(index, name)`.
@@ -253,8 +275,9 @@ fn decode_camera_frame(frame: &Buffer) -> Result<RgbImage, String> {
 /// Cameras differ a lot: many laptop webcams offer MJPEG only at 720p, others only
 /// raw YUY2/NV12. Try the formats we want most first and fall back gracefully
 /// instead of failing with "format not found".
-fn open_camera(index: u32) -> Result<Camera, String> {
+fn open_camera(index: u32, wanted: (u32, u32)) -> Result<Camera, String> {
     let attempts = [
+        RequestedFormatType::Closest(CameraFormat::new(Resolution::new(wanted.0, wanted.1), FrameFormat::MJPEG, 30)),
         RequestedFormatType::Closest(CameraFormat::new(Resolution::new(1280, 720), FrameFormat::MJPEG, 30)),
         RequestedFormatType::Closest(CameraFormat::new(Resolution::new(640, 480), FrameFormat::MJPEG, 30)),
         RequestedFormatType::Closest(CameraFormat::new(Resolution::new(1280, 720), FrameFormat::YUYV, 30)),
@@ -296,9 +319,10 @@ fn webcam_loop(
     camera_index: u32,
     quality: Arc<AtomicU32>,
     diagnostics: Arc<CameraDiagnostics>,
+    hub: Arc<StreamHub>,
 ) {
     if !active.load(Ordering::Relaxed) { return; }
-    let mut camera = match open_camera(camera_index) {
+    let mut camera = match open_camera(camera_index, capture_size(quality.load(Ordering::Relaxed))) {
         Ok(camera) => camera,
         Err(error) => {
             let _ = events.try_send(VideoEvent::Error(format!(
@@ -328,8 +352,20 @@ fn webcam_loop(
     let mut last_processed = Instant::now() - Duration::from_secs(1);
     let mut failures = 0u32;
     let mut decode_failures = 0u32;
+    // H.264 state (modes 4 and 5).
+    let mut h264: Option<(u32, StreamEncoder)> = None;
+    let mut picture: Option<I420> = None;
+    let mut scaler = Scaler::default();
+    let mut scaled: Vec<u8> = Vec::new();
+    let mut preview: Vec<u8> = Vec::new();
+    let stream_session = rand::random::<u64>().max(1);
+    let mut stream_seq = 0u32;
+    let mut was_sending = false;
+    let mut preview_tick = 0u32;
     while active.load(Ordering::Relaxed) {
-        let (width, height, fps, jpeg_quality) = video_preset(quality.load(Ordering::Relaxed));
+        let mode = quality.load(Ordering::Relaxed);
+        let (width, height, jpeg_fps, jpeg_quality) = video_preset(mode);
+        let fps = h264_preset(mode).map_or(jpeg_fps, |preset| preset.2 as u64);
         // Always pull frames at the camera's own pace so the driver queue never
         // fills up (that would add seconds of delay); only *process* at `fps`.
         let frame = match camera.frame() {
@@ -363,14 +399,76 @@ fn webcam_loop(
                 continue;
             }
         };
+        if let Some((target_w, target_h, target_fps, bitrate)) = h264_preset(mode) {
+            if h264.as_ref().map(|state| state.0) != Some(mode) {
+                match StreamEncoder::new(StreamKind::Camera, target_fps, bitrate) {
+                    Ok(encoder) => h264 = Some((mode, encoder)),
+                    Err(error) => {
+                        let _ = events.try_send(VideoEvent::Error(format!("Камера: {error}")));
+                        break;
+                    }
+                }
+            }
+            let (source_w, source_h) = (decoded.width() as usize, decoded.height() as usize);
+            let (crop_w, crop_h) = if source_w * 9 > source_h * 16 { (source_h * 16 / 9, source_h) } else { (source_w, source_w * 9 / 16) };
+            let crop = (((source_w - crop_w) / 2) as f64, ((source_h - crop_h) / 2) as f64, crop_w as f64, crop_h as f64);
+            let (out_w, out_h) = fit_size(crop_w, crop_h, target_w, target_h);
+            let mut raw = decoded.into_raw();
+            if scaler.scale(&mut raw, (source_w, source_h), 3, Some(crop), (out_w, out_h), &mut scaled).is_err() { continue; }
+            live.store(true, Ordering::Relaxed);
+
+            // Local preview (every other frame is plenty for your own tile).
+            preview_tick = preview_tick.wrapping_add(1);
+            if preview_tick % 2 == 0 {
+                let (pw, ph) = fit_size(out_w, out_h, 640, 360);
+                let rgba = if (pw, ph) == (out_w, out_h) { rgb_to_rgba(&scaled) } else {
+                    let mut copy = scaled.clone();
+                    if scaler.scale(&mut copy, (out_w, out_h), 3, None, (pw, ph), &mut preview).is_ok() { rgb_to_rgba(&preview) } else { Vec::new() }
+                };
+                if !rgba.is_empty() {
+                    let _ = events.try_send(VideoEvent::Frame(VideoFrame {
+                        sender_id: id, kind: StreamKind::Camera, width: pw, height: ph, rgba,
+                    }));
+                }
+            }
+
+            // Nobody to send to: skip the expensive encoding entirely.
+            if hub.viewers() == 0 {
+                was_sending = false;
+                let _ = hub.take_key_request(StreamKind::Camera);
+                continue;
+            }
+            if picture.as_ref().is_none_or(|p| p.width != out_w || p.height != out_h) {
+                picture = Some(I420::new(out_w, out_h));
+            }
+            let Some(yuv) = picture.as_mut() else { continue; };
+            yuv.fill_from_packed(&scaled, out_w * 3, 3, false);
+            let force_key = hub.take_key_request(StreamKind::Camera) || !was_sending;
+            was_sending = true;
+            let Some((_, encoder)) = h264.as_mut() else { continue; };
+            match encoder.encode(yuv, force_key) {
+                Ok(Some(frame)) => {
+                    hub.send(StreamKind::Camera, stream_session, stream_seq, frame.key, &frame.data);
+                    stream_seq = stream_seq.wrapping_add(1);
+                    frames_sent.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = events.try_send(VideoEvent::Error(format!("Камера: {error}")));
+                    break;
+                }
+            }
+            continue;
+        }
         // Crop to 16:9 first, then shrink *before* encoding.
         let cropped = crop_to_16x9(&decoded);
         let small: RgbImage = image::imageops::resize(&cropped, width, height, FilterType::CatmullRom);
         live.store(true, Ordering::Relaxed);
         // Keep the preview responsive, but reduce traffic when almost nothing moves.
         let _ = events.try_send(VideoEvent::Frame(VideoFrame {
-            sender_id: id, width: width as usize, height: height as usize,
-            rgb: small.as_raw().clone(),
+            sender_id: id, kind: StreamKind::Camera,
+            width: width as usize, height: height as usize,
+            rgba: rgb_to_rgba(small.as_raw()),
         }));
         let has_motion = last_sent.as_ref().is_none_or(|old| {
             let next = small.as_raw();
@@ -425,6 +523,7 @@ pub struct VideoSession {
     live: Arc<AtomicBool>,
     enabled_at: Option<Instant>,
     pub diagnostics: Arc<CameraDiagnostics>,
+    hub: Arc<StreamHub>,
     recv_stop: Arc<AtomicBool>,
     webcam_worker: Option<JoinHandle<()>>,
     recv_worker: Option<JoinHandle<()>>,
@@ -447,6 +546,7 @@ impl VideoSession {
         rx_socket.set_read_timeout(Some(Duration::from_millis(100)))
             .map_err(|e| e.to_string())?;
         let (events_tx, events_rx) = mpsc::sync_channel(12);
+        let hub = Arc::new(StreamHub::start(id, Arc::clone(&peers), events_tx.clone())?);
         let recv_stop = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&recv_stop);
         let decode_stop = Arc::clone(&recv_stop);
@@ -527,6 +627,7 @@ impl VideoSession {
             live: Arc::new(AtomicBool::new(false)),
             enabled_at: None,
             diagnostics: Arc::new(CameraDiagnostics::default()),
+            hub,
             recv_stop,
             webcam_worker: None,
             recv_worker: Some(worker),
@@ -538,6 +639,10 @@ impl VideoSession {
             frames_recovered,
         })
     }
+    /// The H.264 network hub, shared with screen sharing.
+    pub fn hub(&self) -> Arc<StreamHub> { Arc::clone(&self.hub) }
+    /// H.264 frames received from friends (camera and screens).
+    pub fn stream_frames_received(&self) -> u64 { self.hub.frames_received.load(Ordering::Relaxed) }
     pub fn enabled(&self) -> bool { self.active.load(Ordering::Relaxed) }
     /// Camera was switched on but has not delivered a frame yet.
     pub fn starting(&self) -> bool { self.enabled() && !self.live.load(Ordering::Relaxed) }
@@ -552,6 +657,7 @@ impl VideoSession {
         self.enabled_at = Some(Instant::now());
         self.diagnostics = Arc::new(CameraDiagnostics::default());
         let diagnostics = Arc::clone(&self.diagnostics);
+        let hub = Arc::clone(&self.hub);
         let stop = Arc::clone(&self.active);
         let live = Arc::clone(&self.live);
         let tx = self.events_tx.clone();
@@ -566,7 +672,7 @@ impl VideoSession {
         let previous = self.webcam_worker.take();
         self.webcam_worker = Some(thread::spawn(move || {
             if let Some(previous) = previous { let _ = previous.join(); }
-            webcam_loop(Arc::clone(&stop), live, id, peers, tx, count, camera_index, quality, diagnostics);
+            webcam_loop(Arc::clone(&stop), live, id, peers, tx, count, camera_index, quality, diagnostics, hub);
             stop.store(false, Ordering::Relaxed);
         }));
     }
@@ -777,7 +883,7 @@ mod tests {
         assert!(assembler.recovered);
         let frame = decode_jpeg(77, &jpg.unwrap()).unwrap();
         assert_eq!((frame.sender_id,frame.width,frame.height),(77,320,180));
-        assert_eq!(frame.rgb.len(),320*180*3);
+        assert_eq!(frame.rgba.len(),320*180*4);
     }
 
     #[test]

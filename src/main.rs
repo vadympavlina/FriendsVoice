@@ -3,6 +3,7 @@ mod mesh;
 mod protocol;
 mod voice;
 mod video;
+mod stream;
 mod ui;
 mod branding;
 
@@ -19,6 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use voice::VoiceSession;
+use stream::StreamKind;
 use video::{VideoSession, VideoEvent};
 
 
@@ -51,20 +53,20 @@ impl Default for Settings {
             push_to_talk: false,
             ptt_key: voice::PTT_VK,
             camera_index: 0,
-            video_quality: 1,
+            video_quality: 4,
             noise_gate: false, // Opt-in: never silently clip quiet microphones.
             gate_threshold: 0.018,
         }
     }
 }
 
-/// Flips tightly packed RGB rows left to right.
-fn mirror_horizontally(rgb: &mut [u8], width: usize) {
+/// Flips tightly packed pixel rows left to right.
+fn mirror_horizontally(pixels: &mut [u8], width: usize, bytes_per_pixel: usize) {
     if width == 0 { return; }
-    for row in rgb.chunks_exact_mut(width * 3) {
+    for row in pixels.chunks_exact_mut(width * bytes_per_pixel) {
         for x in 0..width / 2 {
-            let (left, right) = (x * 3, (width - 1 - x) * 3);
-            for c in 0..3 { row.swap(left + c, right + c); }
+            let (left, right) = (x * bytes_per_pixel, (width - 1 - x) * bytes_per_pixel);
+            for c in 0..bytes_per_pixel { row.swap(left + c, right + c); }
         }
     }
 }
@@ -76,10 +78,10 @@ mod mirror_tests {
     fn mirror_swaps_pixels_in_each_row_only() {
         // Two rows of three pixels: [A B C] [D E F]
         let mut data: Vec<u8> = (0..18).collect();
-        mirror_horizontally(&mut data, 3);
+        mirror_horizontally(&mut data, 3, 3);
         assert_eq!(&data[..9], &[6, 7, 8, 3, 4, 5, 0, 1, 2]);
         assert_eq!(&data[9..], &[15, 16, 17, 12, 13, 14, 9, 10, 11]);
-        mirror_horizontally(&mut data, 3);
+        mirror_horizontally(&mut data, 3, 3);
         assert_eq!(data, (0..18).collect::<Vec<u8>>());
     }
 }
@@ -167,8 +169,8 @@ pub struct FriendsApp {
     messages: Vec<ChatEntry>,
     voice: Option<VoiceSession>,
     video: Option<VideoSession>,
-    video_textures: HashMap<u64, egui::TextureHandle>,
-    video_seen: HashMap<u64, Instant>,
+    video_textures: HashMap<(u64, StreamKind), egui::TextureHandle>,
+    video_seen: HashMap<(u64, StreamKind), Instant>,
     mic_enabled: Arc<AtomicBool>,
     push_to_talk: Arc<AtomicBool>,
     ptt_key: Arc<AtomicI32>,
@@ -206,7 +208,7 @@ impl Default for FriendsApp {
         let saved_ptt = settings.push_to_talk;
         let saved_ptt_key = settings.ptt_key;
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
-        let saved_video_quality = settings.video_quality.min(3);
+        let saved_video_quality = settings.video_quality.min(5);
         let saved_noise_gate = settings.noise_gate;
         let saved_gate_threshold = settings.gate_threshold.clamp(0.003, 0.08);
         let seeds = settings.known_ips.iter().filter_map(|ip| parse_known_ip(ip)).collect();
@@ -430,8 +432,8 @@ impl FriendsApp {
         if video.enabled() {
             video.disable();
             if let Some(id) = local_id {
-                self.video_textures.remove(&id);
-                self.video_seen.remove(&id);
+                self.video_textures.remove(&(id, StreamKind::Camera));
+                self.video_seen.remove(&(id, StreamKind::Camera));
             }
             self.notice("Камеру вимкнено.");
         } else {
@@ -510,10 +512,17 @@ impl FriendsApp {
         }
     }
     fn update_video_quality(&mut self, quality: u32) {
-        let quality = quality.min(3);
+        let quality = quality.min(5);
         self.video_quality.store(quality, Ordering::Relaxed);
         self.settings.video_quality = quality;
         save_settings(&self.settings);
+        // The camera is asked for a different resolution in the HD modes, so restart it.
+        if let Some(video) = self.video.as_mut() {
+            if video.enabled() {
+                video.disable();
+                video.enable();
+            }
+        }
     }
 
     fn poll_video(&mut self, ctx: &egui::Context) {
@@ -527,32 +536,32 @@ impl FriendsApp {
         for event in events {
             match event {
                 VideoEvent::Frame(frame) => {
-                    if Some(frame.sender_id) == local_id && !camera_on {
+                    if Some(frame.sender_id) == local_id && frame.kind == StreamKind::Camera && !camera_on {
                         continue; // discard queued previews after switching camera off
                     }
-                    latest.insert(frame.sender_id, frame);
+                    latest.insert((frame.sender_id, frame.kind), frame);
                 }
                 VideoEvent::Error(message) => self.notice(message),
             }
         }
-        for mut frame in latest.into_values() {
-            // Your own preview is mirrored, like looking into a mirror. What is
-            // sent to friends is not mirrored.
-            if Some(frame.sender_id) == local_id {
-                mirror_horizontally(&mut frame.rgb, frame.width);
+        for (key, mut frame) in latest {
+            // Your own camera preview is mirrored, like looking into a mirror.
+            // What friends receive is not mirrored.
+            if Some(frame.sender_id) == local_id && frame.kind == StreamKind::Camera {
+                mirror_horizontally(&mut frame.rgba, frame.width, 4);
             }
-            let image = egui::ColorImage::from_rgb([frame.width, frame.height], &frame.rgb);
-            if let Some(texture) = self.video_textures.get_mut(&frame.sender_id) {
+            let image = egui::ColorImage::from_rgba_premultiplied([frame.width, frame.height], &frame.rgba);
+            if let Some(texture) = self.video_textures.get_mut(&key) {
                 texture.set(image, egui::TextureOptions::LINEAR);
             } else {
                 let texture = ctx.load_texture(
-                    format!("friends-camera-{}", frame.sender_id),
+                    format!("friends-video-{}-{:?}", frame.sender_id, frame.kind),
                     image,
                     egui::TextureOptions::LINEAR,
                 );
-                self.video_textures.insert(frame.sender_id, texture);
+                self.video_textures.insert(key, texture);
             }
-            self.video_seen.insert(frame.sender_id, Instant::now());
+            self.video_seen.insert(key, Instant::now());
         }
         self.video_seen.retain(|_, time| time.elapsed() < Duration::from_secs(2));
         self.video_textures.retain(|id, _| self.video_seen.contains_key(id));
