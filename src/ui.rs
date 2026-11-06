@@ -547,26 +547,42 @@ impl FriendsApp {
 
     pub(super) fn neon_settings(&mut self,ui:&mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false,false]).show(ui,|ui|{
-            ui.add_space(8.0);
+            ui.add_space(7.0);
+            ui.label(RichText::new("CUSTOMIZE YOUR SPACE")
+                .size(10.8).strong().color(BLUE));
             ui.horizontal(|ui|{
-                ui.label(text_title("Налаштування"));
+                ui.label(RichText::new("Налаштування").size(22.0)
+                    .strong().color(BRIGHT));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
                     if icon_button(ui,"Закрити",Glyph::Close,true,false,false,30.0){
                         self.settings_open=false;
                     }
                 });
             });
-            ui.add_space(8.0);
-            for (index,label) in ["Аудіо", "Відео", "Загальні", "Про програму"].iter().enumerate(){
-                let selected=self.settings_page==index;
-                let button=egui::Button::new(RichText::new(*label)
-                    .color(if selected{BRIGHT}else{SOFT}).size(13.0))
-                    .fill(if selected{PURPLE.linear_multiply(0.45)}else{SURFACE_2})
-                    .rounding(Rounding::same(9.0))
-                    .min_size(Vec2::new(ui.available_width(),29.0));
-                if ui.add(button).clicked(){self.settings_page=index;}
-            }
-            ui.add_space(13.0);
+            ui.add_space(3.0);
+            ui.label(RichText::new("Звук, відео та персональні параметри")
+                .size(11.2).color(SOFT));
+            ui.add_space(14.0);
+            egui::Frame::none()
+                .fill(Color32::from_rgb(27, 33, 55))
+                .stroke(Stroke::new(1.0,BORDER))
+                .rounding(Rounding::same(14.0))
+                .inner_margin(egui::Margin::same(7.0))
+                .show(ui,|ui|{
+                    for (index,label) in ["Аудіо", "Відео", "Загальні", "Про програму"].iter().enumerate(){
+                        let selected=self.settings_page==index;
+                        let button=egui::Button::new(RichText::new(*label)
+                            .color(if selected{BRIGHT}else{SOFT}).size(12.8)
+                            .strong())
+                            .fill(if selected{Color32::from_rgb(92,67,152)}else{SURFACE_2})
+                            .stroke(Stroke::new(if selected{1.0}else{0.5},
+                                if selected{PURPLE}else{BORDER}))
+                            .rounding(Rounding::same(10.0))
+                            .min_size(Vec2::new(ui.available_width(),33.0));
+                        if ui.add(button).clicked(){self.settings_page=index;}
+                    }
+                });
+            ui.add_space(15.0);
             ui.separator();
             match self.settings_page {
                 0=>{
@@ -740,7 +756,7 @@ impl FriendsApp {
                 1=>{
                     section(ui,"ВІДЕО ТА ЕКРАН");
                     card().show(ui,|ui|{
-                        ui.label(RichText::new("Камера · P2P Beta").strong().color(BRIGHT));
+                        ui.label(RichText::new("Камера · P2P Beta").size(14.0).strong().color(BRIGHT));
                         ui.label(RichText::new("Три режими якості й відновлення кадру при втраті одного UDP-фрагмента.")
                             .size(12.0).color(SOFT));
                         ui.add_space(8.0);
@@ -827,7 +843,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.8 · Stability"));
+                    ui.label(text_title("Версія 0.9 · Aurora UI"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
