@@ -1,5 +1,11 @@
-FRIENDS VOICE 0.3 - WINDOWS 10/11 X64 - FULL P2P
+FRIENDS VOICE 0.4 - NEON DESIGN - WINDOWS 10/11 X64
 =================================================
+
+NEW DESIGN:
+ - Left: Radmin status, channel, friends, find by IP.
+ - Center: real connected participants, chat and bottom voice controls.
+ - Right: audio/video/general/about settings tabs.
+ - Camera and screen-share buttons are deliberately disabled; not implemented.
 
 THIS RELEASE NEEDS NO SERVER, NO start-server.cmd, NO PASSWORD.
 Every computer runs ONLY friends-voice.exe.
