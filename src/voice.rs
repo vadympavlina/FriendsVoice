@@ -168,32 +168,110 @@ pub fn list_output_devices() -> Vec<String> {
     result
 }
 
-fn input_config(device: &cpal::Device) -> Result<StreamConfig, String> {
+fn sample_format_priority(format: SampleFormat) -> usize {
+    match format {
+        SampleFormat::F32 => 0,
+        SampleFormat::I16 => 1,
+        SampleFormat::U16 => 2,
+        _ => 9,
+    }
+}
+fn input_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
     device.supported_input_configs()
         .map_err(|e| format!("Налаштування мікрофона: {e}"))?
-        .find(|r| r.sample_format() == SampleFormat::F32
+        .filter(|r| sample_format_priority(r.sample_format()) < 9
             && r.min_sample_rate().0 <= SAMPLE_RATE
             && r.max_sample_rate().0 >= SAMPLE_RATE)
-        .map(|r| StreamConfig {
-            channels: r.channels(),
-            sample_rate: SampleRate(SAMPLE_RATE),
-            buffer_size: cpal::BufferSize::Default,
+        .min_by_key(|r| sample_format_priority(r.sample_format()))
+        .map(|r| {
+            let format = r.sample_format();
+            (StreamConfig {
+                channels: r.channels(),
+                sample_rate: SampleRate(SAMPLE_RATE),
+                buffer_size: cpal::BufferSize::Default,
+            }, format)
         })
-        .ok_or_else(|| "Мікрофон не підтримує 48 кГц / F32. Вибери інший пристрій.".to_string())
+        .ok_or_else(|| "Мікрофон не підтримує 48 кГц у форматі F32/I16/U16.".to_string())
 }
-
-fn output_config(device: &cpal::Device) -> Result<StreamConfig, String> {
+fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
     device.supported_output_configs()
         .map_err(|e| format!("Налаштування динаміків: {e}"))?
-        .find(|r| r.sample_format() == SampleFormat::F32
+        .filter(|r| sample_format_priority(r.sample_format()) < 9
             && r.min_sample_rate().0 <= SAMPLE_RATE
             && r.max_sample_rate().0 >= SAMPLE_RATE)
-        .map(|r| StreamConfig {
-            channels: r.channels(),
-            sample_rate: SampleRate(SAMPLE_RATE),
-            buffer_size: cpal::BufferSize::Default,
+        .min_by_key(|r| sample_format_priority(r.sample_format()))
+        .map(|r| {
+            let format = r.sample_format();
+            (StreamConfig {
+                channels: r.channels(),
+                sample_rate: SampleRate(SAMPLE_RATE),
+                buffer_size: cpal::BufferSize::Default,
+            }, format)
         })
-        .ok_or_else(|| "Динаміки не підтримують 48 кГц / F32. Вибери інший пристрій.".to_string())
+        .ok_or_else(|| "Навушники не підтримують 48 кГц у форматі F32/I16/U16.".to_string())
+}
+fn capture_buffer<T: Copy>(
+    buffer: &[T],
+    channels: usize,
+    capture_samples: &Arc<Mutex<VecDeque<f32>>>,
+    capture_level: &Arc<AtomicU32>,
+    to_float: fn(T) -> f32,
+) {
+    let Ok(mut queue) = capture_samples.lock() else { return; };
+    let mut sum_sq = 0f32;
+    let mut frames = 0usize;
+    for group in buffer.chunks(channels.max(1)) {
+        let mono = group.iter().copied().map(to_float).sum::<f32>() / group.len() as f32;
+        sum_sq += mono * mono;
+        frames += 1;
+        queue.push_back(mono);
+    }
+    while queue.len() > MAX_CAPTURE_QUEUE {
+        queue.pop_front();
+    }
+    let rms = (sum_sq / frames.max(1) as f32).sqrt().min(1.0);
+    capture_level.store(rms.to_bits(), Ordering::Relaxed);
+}
+fn soft_limit(sample: f32) -> f32 {
+    let magnitude = sample.abs();
+    if magnitude <= 0.85 { sample }
+    else {
+        // A continuous saturating curve avoids audible hard clipping when
+        // several friends speak simultaneously.
+        let excess = magnitude - 0.85;
+        sample.signum() * (0.85 + 0.15 * excess / (excess + 0.15))
+    }
+}
+fn render_buffer<T: Copy>(
+    data: &mut [T],
+    channels: usize,
+    playback: &Arc<Mutex<HashMap<u64, SpeakerBuffer>>>,
+    peer_volumes: &Arc<Mutex<HashMap<u64, f32>>>,
+    deafened: &Arc<AtomicBool>,
+    volume: &Arc<AtomicU32>,
+    to_sample: fn(f32) -> T,
+) {
+    let Ok(mut speakers) = playback.lock() else {
+        data.fill(to_sample(0.0));
+        return;
+    };
+    let volume = f32::from_bits(volume.load(Ordering::Relaxed)).clamp(0.0, 2.0);
+    let muted = deafened.load(Ordering::Relaxed);
+    let gains = peer_volumes.lock().ok();
+    for frame in data.chunks_mut(channels.max(1)) {
+        let mixed = speakers.iter_mut().map(|(id, speaker)| {
+            speaker.next() * gains.as_ref()
+                .and_then(|g| g.get(id).copied()).unwrap_or(1.0).clamp(0.0, 2.0)
+        }).sum::<f32>();
+        let output = if muted { 0.0 } else { soft_limit(mixed * volume) };
+        frame.fill(to_sample(output));
+    }
+}
+fn to_i16(value: f32) -> i16 {
+    (value.clamp(-1.0, 1.0) * 32767.0).round() as i16
+}
+fn to_u16(value: f32) -> u16 {
+    (value.clamp(-1.0, 1.0) * 32767.5 + 32767.5).round() as u16
 }
 
 impl VoiceSession {
@@ -232,8 +310,8 @@ impl VoiceSession {
             }).or_else(|| host.default_output_device())
         }.ok_or("Не знайдено пристрій відтворення")?;
 
-        let in_config = input_config(&input)?;
-        let out_config = output_config(&output)?;
+        let (in_config, in_format) = input_config(&input)?;
+        let (out_config, out_format) = output_config(&output)?;
         let in_channels = in_config.channels as usize;
         let out_channels = out_config.channels as usize;
 
@@ -250,62 +328,68 @@ impl VoiceSession {
         let per_peer_volumes = Arc::new(Mutex::new(HashMap::<u64, f32>::new()));
         let active_speakers = Arc::new(Mutex::new(HashMap::<u64, Instant>::new()));
 
-        let capture_samples = Arc::clone(&samples);
-        let capture_level = Arc::clone(&level);
-        let input_stream = input.build_input_stream(
-            &in_config,
-            move |buffer: &[f32], _| {
-                let mut queue = match capture_samples.lock() {
-                    Ok(q) => q,
-                    Err(_) => return,
-                };
-                let mut sum_sq = 0f32;
-                let mut frames = 0usize;
-                for channels in buffer.chunks(in_channels) {
-                    let mono = channels.iter().copied().sum::<f32>() / channels.len() as f32;
-                    sum_sq += mono * mono;
-                    frames += 1;
-                    queue.push_back(mono);
-                }
-                while queue.len() > MAX_CAPTURE_QUEUE {
-                    queue.pop_front();
-                }
-                let rms = (sum_sq / frames.max(1) as f32).sqrt().min(1.0);
-                capture_level.store(rms.to_bits(), Ordering::Relaxed);
-            },
-            |err| eprintln!("Audio input: {err}"),
-            None,
-        ).map_err(|e| format!("Мікрофон: {e}"))?;
+        // Use the device's 48 kHz sample format rather than requiring F32 only.
+        // Windows microphones often expose I16 or U16 devices, especially headsets.
+        let input_stream = match in_format {
+            SampleFormat::F32 => {
+                let q = Arc::clone(&samples);
+                let l = Arc::clone(&level);
+                input.build_input_stream(&in_config,
+                    move |buf: &[f32], _| capture_buffer(buf, in_channels, &q, &l, |x| x),
+                    |err| eprintln!("Audio input: {err}"), None)
+            }
+            SampleFormat::I16 => {
+                let q = Arc::clone(&samples);
+                let l = Arc::clone(&level);
+                input.build_input_stream(&in_config,
+                    move |buf: &[i16], _| capture_buffer(buf, in_channels, &q, &l,
+                        |x| x as f32 / 32768.0),
+                    |err| eprintln!("Audio input: {err}"), None)
+            }
+            SampleFormat::U16 => {
+                let q = Arc::clone(&samples);
+                let l = Arc::clone(&level);
+                input.build_input_stream(&in_config,
+                    move |buf: &[u16], _| capture_buffer(buf, in_channels, &q, &l,
+                        |x| (x as f32 - 32768.0) / 32768.0),
+                    |err| eprintln!("Audio input: {err}"), None)
+            }
+            _ => return Err("Формат мікрофона не підтримується".into()),
+        }.map_err(|e| format!("Мікрофон: {e}"))?;
 
-        let play_samples = Arc::clone(&playback);
-        let play_deafened = Arc::clone(&deafened);
-        let play_volume = Arc::clone(&volume);
-        let play_peer_volumes = Arc::clone(&per_peer_volumes);
-        let output_stream = output.build_output_stream(
-            &out_config,
-            move |data: &mut [f32], _| {
-                let Ok(mut speakers) = play_samples.lock() else {
-                    data.fill(0.0);
-                    return;
-                };
-                let volume = f32::from_bits(play_volume.load(Ordering::Relaxed)).clamp(0.0, 2.0);
-                let muted = play_deafened.load(Ordering::Relaxed);
-                // One lock per callback, never per sample, keeps the realtime audio path light.
-                let peer_gains = play_peer_volumes.lock().ok();
-                for frame in data.chunks_mut(out_channels) {
-                    let mut mixed = 0f32;
-                    for (id, speaker) in speakers.iter_mut() {
-                        let gain = peer_gains.as_ref().and_then(|vols| vols.get(id).copied())
-                            .unwrap_or(1.0).clamp(0.0, 2.0);
-                        mixed += speaker.next() * gain;
-                    }
-                    let sample = if muted { 0.0 } else { (mixed * volume).clamp(-1.0, 1.0) };
-                    frame.fill(sample);
-                }
-            },
-            |err| eprintln!("Audio output: {err}"),
-            None,
-        ).map_err(|e| format!("Відтворення: {e}"))?;
+        let output_stream = match out_format {
+            SampleFormat::F32 => {
+                let p = Arc::clone(&playback);
+                let gains = Arc::clone(&per_peer_volumes);
+                let deaf = Arc::clone(&deafened);
+                let v = Arc::clone(&volume);
+                output.build_output_stream(&out_config,
+                    move |buf: &mut [f32], _| render_buffer(
+                        buf, out_channels, &p, &gains, &deaf, &v, |x| x),
+                    |err| eprintln!("Audio output: {err}"), None)
+            }
+            SampleFormat::I16 => {
+                let p = Arc::clone(&playback);
+                let gains = Arc::clone(&per_peer_volumes);
+                let deaf = Arc::clone(&deafened);
+                let v = Arc::clone(&volume);
+                output.build_output_stream(&out_config,
+                    move |buf: &mut [i16], _| render_buffer(
+                        buf, out_channels, &p, &gains, &deaf, &v, to_i16),
+                    |err| eprintln!("Audio output: {err}"), None)
+            }
+            SampleFormat::U16 => {
+                let p = Arc::clone(&playback);
+                let gains = Arc::clone(&per_peer_volumes);
+                let deaf = Arc::clone(&deafened);
+                let v = Arc::clone(&volume);
+                output.build_output_stream(&out_config,
+                    move |buf: &mut [u16], _| render_buffer(
+                        buf, out_channels, &p, &gains, &deaf, &v, to_u16),
+                    |err| eprintln!("Audio output: {err}"), None)
+            }
+            _ => return Err("Формат навушників не підтримується".into()),
+        }.map_err(|e| format!("Відтворення: {e}"))?;
 
         input_stream.play().map_err(|e| format!("Запуск мікрофона: {e}"))?;
         output_stream.play().map_err(|e| format!("Запуск динаміків: {e}"))?;
@@ -509,6 +593,20 @@ impl VoiceSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headsets_and_soft_mixer_keep_valid_sample_ranges() {
+        assert_eq!(sample_format_priority(SampleFormat::F32),0);
+        assert_eq!(sample_format_priority(SampleFormat::I16),1);
+        assert_eq!(sample_format_priority(SampleFormat::U16),2);
+        assert_eq!(to_i16(0.0),0);
+        assert_eq!(to_u16(0.0),32768);
+        assert_eq!(to_u16(1.0),65535);
+        assert_eq!(to_u16(-1.0),0);
+        assert!((soft_limit(0.5)-0.5).abs()<0.0001);
+        assert!(soft_limit(2.0) < 1.0);
+        assert!(soft_limit(2.0) > 0.9);
+    }
 
     #[test]
     fn voice_packet_header_and_ordering() {
