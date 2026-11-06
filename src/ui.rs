@@ -384,7 +384,9 @@ impl FriendsApp {
                         avatar(ui,&p.name,33.0,peer_color(i+1));
                         ui.vertical(|ui|{
                             ui.label(RichText::new(&p.name).strong().size(12.5));
-                            ui.label(text_caption(if p.voice{"У голосі"}else{"Онлайн"}));
+                            ui.label(text_caption(if self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)) {
+                                "● Говорить зараз"
+                            } else if p.voice { "У голосі" } else { "Онлайн" }));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
                             dot(ui,if p.voice{GREEN}else{BLUE},3.5);
@@ -746,7 +748,8 @@ impl FriendsApp {
                     if let Some(p)=self.peers.get(i){
                         peer_tile(ui,tile_w,tile_h,&p.name,
                             if p.voice{"У голосовому каналі"}else{"У мережі"},
-                            peer_color(i+1),p.voice,false,self.video_textures.get(&p.id));
+                            peer_color(i+1),self.voice.as_ref().is_some_and(|v|v.is_speaking(p.id)),false,
+                            self.video_textures.get(&p.id));
                     }else{
                         peer_tile(ui,tile_w,tile_h,"","",BLUE,false,true,None);
                     }
@@ -762,7 +765,7 @@ impl FriendsApp {
                     for (index, peer) in second_row.iter().take(2).enumerate() {
                         peer_tile(ui,secondary_width,115.0,&peer.name,
                             if peer.voice{"У голосовому каналі"}else{"У мережі"},
-                            peer_color(index+3),peer.voice,false,
+                            peer_color(index+3),self.voice.as_ref().is_some_and(|v|v.is_speaking(peer.id)),false,
                             self.video_textures.get(&peer.id));
                     }
                 });
