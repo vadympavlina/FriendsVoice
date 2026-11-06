@@ -1038,61 +1038,128 @@ impl FriendsApp {
                 });
 
             ui.add_space(12.0);
-            // A flexible messages panel fills leftover space while the call
-            // controls remain accessible at the bottom of the central area.
-            let reserved_footer=91.0;
-            let chat_height=(ui.available_height()-reserved_footer-10.0).max(170.0);
-            egui::Frame::none()
-                .fill(SURFACE)
-                .stroke(Stroke::new(1.0,BORDER))
-                .rounding(Rounding::same(18.0))
-                .inner_margin(egui::Margin::same(14.0))
-                .show(ui,|ui|{
-                    ui.set_min_height(chat_height-28.0);
-                    ui.horizontal(|ui|{
-                        let (r,_) = ui.allocate_exact_size(Vec2::splat(27.0),Sense::hover());
-                        glyph(ui,Glyph::Chat,r,BLUE);
-                        ui.label(RichText::new("Чат · Загальний").size(16.0)
-                            .strong().color(BRIGHT));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                            ui.label(text_caption(format!("{} учасників у мережі",self.peers.len()+1)));
+            // In Focus Mode, video takes priority. Chat remains one click away.
+            if self.focus_mode {
+                ui.add_space(14.0);
+                egui::Frame::none()
+                    .fill(Color32::from_rgb(28,37,62))
+                    .stroke(Stroke::new(1.0,BORDER))
+                    .rounding(Rounding::same(17.0))
+                    .inner_margin(egui::Margin::symmetric(16.0,12.0))
+                    .show(ui,|ui|{
+                        ui.horizontal(|ui|{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new("РЕЖИМ ФОКУСУ").strong().size(12.0)
+                                    .color(BLUE));
+                                ui.label(RichText::new("Більше простору для облич друзів")
+                                    .size(11.0).color(SOFT));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                let label=if self.chat_unread>0 {
+                                    format!("Відкрити чат · {}",self.chat_unread)
+                                } else {"Повернути чат".to_string()};
+                                if ui.add(egui::Button::new(RichText::new(label)
+                                    .color(BRIGHT).strong().size(11.5))
+                                    .fill(PURPLE).rounding(Rounding::same(10.0))
+                                    .min_size(Vec2::new(114.0,33.0))).clicked(){
+                                    self.focus_mode=false;
+                                    self.chat_unread=0;
+                                }
+                            });
                         });
                     });
-                    ui.add_space(2.0);
-                    ui.separator();
-                    let list_height=(chat_height-90.0).max(72.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("aurora_chat_feed")
-                        .max_height(list_height)
-                        .stick_to_bottom(true)
-                        .auto_shrink([false,false])
-                        .show(ui,|ui|{
-                            ui.set_min_height(list_height);
-                            for message in &self.messages {
-                                let mine=message.name==self.settings.nickname && !message.system;
-                                bubble_chat(ui,message,mine);
-                                ui.add_space(9.0);
+            } else {
+                ui.add_space(12.0);
+                let reserved_footer=if ui.available_width()<530.0 {124.0}else{88.0};
+                let chat_height=(ui.available_height()-reserved_footer-10.0).max(172.0);
+                egui::Frame::none()
+                    .fill(SURFACE)
+                    .stroke(Stroke::new(1.0,BORDER))
+                    .rounding(Rounding::same(18.0))
+                    .inner_margin(egui::Margin::same(14.0))
+                    .show(ui,|ui|{
+                        ui.set_min_height(chat_height-28.0);
+                        ui.horizontal(|ui|{
+                            let (r,_) = ui.allocate_exact_size(Vec2::splat(27.0),Sense::hover());
+                            glyph(ui,Glyph::Chat,r,BLUE);
+                            ui.label(RichText::new("Чат · Загальний").size(15.0)
+                                .strong().color(BRIGHT));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                if icon_button(ui,"Пошук у чаті · Ctrl+F",Glyph::Search,
+                                    true,self.chat_search_open,false,30.0) {
+                                    self.chat_search_open=!self.chat_search_open;
+                                    if !self.chat_search_open {self.chat_search.clear();}
+                                }
+                                ui.label(text_caption(format!("{} онлайн",self.peers.len()+1)));
+                            });
+                        });
+                        if self.chat_search_open {
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui|{
+                                let width=(ui.available_width()-39.0).max(80.0);
+                                ui.add(egui::TextEdit::singleline(&mut self.chat_search)
+                                    .hint_text("Пошук за текстом або іменем…")
+                                    .desired_width(width));
+                                if icon_button(ui,"Очистити пошук",Glyph::Close,
+                                    true,false,false,30.0) {
+                                    self.chat_search.clear();
+                                    self.chat_search_open=false;
+                                }
+                            });
+                        }
+                        ui.add_space(2.0);
+                        ui.separator();
+                        let list_height=(chat_height-
+                            if self.chat_search_open{129.0}else{91.0}).max(65.0);
+                        let search = self.chat_search.trim().to_lowercase();
+                        egui::ScrollArea::vertical()
+                            .id_salt("aurora_chat_feed")
+                            .max_height(list_height)
+                            .stick_to_bottom(search.is_empty())
+                            .auto_shrink([false,false])
+                            .show(ui,|ui|{
+                                ui.set_min_height(list_height);
+                                let mut found=0usize;
+                                for message in &self.messages {
+                                    if !search.is_empty()
+                                        && !message.text.to_lowercase().contains(&search)
+                                        && !message.name.to_lowercase().contains(&search) {
+                                        continue;
+                                    }
+                                    found+=1;
+                                    let mine=message.name==self.settings.nickname && !message.system;
+                                    bubble_chat(ui,message,mine);
+                                    ui.add_space(9.0);
+                                }
+                                if found==0 {
+                                    ui.add_space(18.0);
+                                    ui.vertical_centered(|ui|{
+                                        ui.label(RichText::new("Повідомлень не знайдено")
+                                            .size(13.0).strong().color(BRIGHT));
+                                        ui.label(text_caption("Спробуй інший запит або закрий пошук."));
+                                    });
+                                }
+                            });
+                        ui.add_space(3.0);
+                        ui.separator();
+                        ui.horizontal(|ui|{
+                            ui.spacing_mut().item_spacing.x=8.0;
+                            let width=(ui.available_width()-47.0).max(65.0);
+                            let response=ui.add_enabled(self.mesh.is_some(),
+                                egui::TextEdit::singleline(&mut self.draft)
+                                    .hint_text("Напиши повідомлення друзям…")
+                                    .desired_width(width)
+                                    .margin(egui::Margin::symmetric(10.0,8.0)));
+                            if response.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)){
+                                self.send_chat();
+                            }
+                            if icon_button(ui,"Надіслати повідомлення",Glyph::Send,
+                                self.mesh.is_some(),false,false,38.0) {
+                                self.send_chat();
                             }
                         });
-                    ui.add_space(3.0);
-                    ui.separator();
-                    ui.horizontal(|ui|{
-                        ui.spacing_mut().item_spacing.x=8.0;
-                        let width=(ui.available_width()-46.0).max(65.0);
-                        let response=ui.add_enabled(self.mesh.is_some(),
-                            egui::TextEdit::singleline(&mut self.draft)
-                                .hint_text("Напиши повідомлення друзям…")
-                                .desired_width(width)
-                                .margin(egui::Margin::symmetric(10.0,8.0)));
-                        if response.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter)){
-                            self.send_chat();
-                        }
-                        if icon_button(ui,"Надіслати",Glyph::Send,self.mesh.is_some(),
-                            false,false,38.0){
-                            self.send_chat();
-                        }
                     });
-                });
+            }
             ui.add_space(10.0);
 
             egui::Frame::none()
