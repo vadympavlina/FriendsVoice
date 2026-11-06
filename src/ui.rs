@@ -237,7 +237,7 @@ fn bubble_chat(ui: &mut Ui, msg: &ChatEntry, mine: bool) {
         });
     });
 }
-fn peer_tile(ui: &mut Ui, width: f32, height: f32, name: &str, status: &str, color: Color32, active: bool, placeholder: bool) {
+fn peer_tile(ui: &mut Ui, width: f32, height: f32, name: &str, status: &str, color: Color32, active: bool, placeholder: bool, video: Option<&egui::TextureHandle>) {
     let (r, _) = ui.allocate_exact_size(Vec2::new(width,height),Sense::hover());
     let painter=ui.painter_at(r);
     painter.rect_filled(r,Rounding::same(16.0),Color32::from_rgb(32,35,61));
@@ -249,6 +249,11 @@ fn peer_tile(ui: &mut Ui, width: f32, height: f32, name: &str, status: &str, col
     for i in (1..=5).rev() {
         painter.circle_filled(Pos2::new(r.left()+3.0,r.bottom()-5.0),i as f32*26.0,
             BLUE.linear_multiply(0.013));
+    }
+    if let Some(frame) = video {
+        painter.image(frame.id(), r.shrink(1.3),
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+            Color32::WHITE);
     }
     painter.rect_stroke(r,Rounding::same(16.0),
         Stroke::new(if active {1.8} else {1.0},if active {GREEN} else {BORDER}));
@@ -262,11 +267,13 @@ fn peer_tile(ui: &mut Ui, width: f32, height: f32, name: &str, status: &str, col
             Align2::CENTER_CENTER,"P2P • Radmin VPN",FontId::proportional(10.0),MUTED);
         return;
     }
-    let avatar_center=Pos2::new(r.center().x,r.center().y-13.0);
-    painter.circle_filled(avatar_center,36.0,color.linear_multiply(0.25));
-    painter.circle_stroke(avatar_center,36.0,Stroke::new(1.7,color));
-    let initials=name.chars().take(2).collect::<String>().to_uppercase();
-    painter.text(avatar_center,Align2::CENTER_CENTER,initials,FontId::proportional(25.0),BRIGHT);
+    if video.is_none() {
+        let avatar_center=Pos2::new(r.center().x,r.center().y-13.0);
+        painter.circle_filled(avatar_center,36.0,color.linear_multiply(0.25));
+        painter.circle_stroke(avatar_center,36.0,Stroke::new(1.7,color));
+        let initials=name.chars().take(2).collect::<String>().to_uppercase();
+        painter.text(avatar_center,Align2::CENTER_CENTER,initials,FontId::proportional(25.0),BRIGHT);
+    }
     painter.rect_filled(Rect::from_min_max(
         Pos2::new(r.left()+1.0,r.bottom()-47.0),Pos2::new(r.right()-1.0,r.bottom()-1.0)),
         Rounding::same(10.0),Color32::from_rgba_unmultiplied(11,13,27,222));
@@ -527,9 +534,23 @@ impl FriendsApp {
                 1=>{
                     section(ui,"ВІДЕО ТА ЕКРАН");
                     card().show(ui,|ui|{
-                        ui.label(RichText::new("Камера").strong().color(BRIGHT));
-                        ui.label(RichText::new("Поки недоступна. Наступний етап — нативна передача відео P2P.")
+                        ui.label(RichText::new("Камера · P2P Beta").strong().color(BRIGHT));
+                        ui.label(RichText::new("Легкий режим: 320×180, до 6 FPS, JPEG через UDP 45890.")
                             .size(12.0).color(SOFT));
+                        ui.label(RichText::new("Камера не вмикається автоматично: тільки після твоєї дії.")
+                            .size(11.0).color(SOFT));
+                        let on=self.video.as_ref().is_some_and(|v|v.enabled());
+                        if tinted_button(ui,
+                            if on{"Вимкнути камеру"}else{"Увімкнути камеру"},
+                            if on{Color32::from_rgb(144,55,75)}else{PURPLE},
+                            self.video.is_some(),32.0).clicked(){
+                            self.toggle_camera();
+                        }
+                        if let Some(video) = &self.video {
+                            ui.label(text_caption(format!("Кадрів: надіслано {} · отримано {}",
+                                video.frames_sent.load(Ordering::Relaxed),
+                                video.frames_received.load(Ordering::Relaxed))));
+                        }
                     });
                     ui.add_space(9.0);
                     card().show(ui,|ui|{
@@ -563,7 +584,7 @@ impl FriendsApp {
                 }
                 _=>{
                     section(ui,"FRIENDS VOICE");
-                    ui.label(text_title("Версія 0.4 · Neon"));
+                    ui.label(text_title("Версія 0.5 · Камера + Push-to-Talk"));
                     ui.label(RichText::new("Нативний P2P-месенджер для Windows 10/11. Rust + egui.")
                         .size(12.0).color(SOFT));
                     ui.add_space(12.0);
@@ -618,14 +639,15 @@ impl FriendsApp {
                 ui.spacing_mut().item_spacing.x=gap;
                 peer_tile(ui,tile_w,tile_h,&self.settings.nickname,
                     if self.voice.is_some(){"Ти · у голосі"}else{"Ти · онлайн"},
-                    PURPLE,self.voice.is_some(),false);
+                    PURPLE,self.voice.is_some(),false,
+                    self.mesh.as_ref().and_then(|m|self.video_textures.get(&m.id)));
                 for i in 0..2{
                     if let Some(p)=self.peers.get(i){
                         peer_tile(ui,tile_w,tile_h,&p.name,
                             if p.voice{"У голосовому каналі"}else{"У мережі"},
-                            peer_color(i+1),p.voice,false);
+                            peer_color(i+1),p.voice,false,self.video_textures.get(&p.id));
                     }else{
-                        peer_tile(ui,tile_w,tile_h,"","",BLUE,false,true);
+                        peer_tile(ui,tile_w,tile_h,"","",BLUE,false,true,None);
                     }
                 }
             });
@@ -705,7 +727,11 @@ impl FriendsApp {
                             voice,deaf && voice,false,42.0){
                             self.deafened.store(!deaf,Ordering::Relaxed);
                         }
-                        icon_button(ui,"Камера — ще в розробці",Glyph::Camera,false,false,false,42.0);
+                        let webcam=self.video.as_ref().is_some_and(|v|v.enabled());
+                        if icon_button(ui,"Камера (P2P beta)",Glyph::Camera,
+                            self.video.is_some(),webcam,false,42.0){
+                            self.toggle_camera();
+                        }
                         icon_button(ui,"Демонстрація екрана — ще в розробці",Glyph::Monitor,false,false,false,42.0);
                         if icon_button(ui,"Налаштування",Glyph::Settings,true,self.settings_open,false,42.0){
                             self.settings_open=!self.settings_open;
