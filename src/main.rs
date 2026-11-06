@@ -4,6 +4,7 @@ mod protocol;
 mod voice;
 mod video;
 mod ui;
+mod branding;
 
 use eframe::egui::{self, Color32};
 use mesh::{Mesh, MeshEvent, PeerView};
@@ -416,7 +417,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1500.0, 900.0])
-            .with_min_inner_size([1060.0, 690.0]),
+            .with_min_inner_size([1060.0, 690.0])
+            .with_icon(branding::icon()),
         ..Default::default()
     };
     eframe::run_native("Friends Voice 0.9 — Aurora", options, Box::new(|cc| {
