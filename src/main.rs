@@ -132,6 +132,12 @@ pub struct FriendsApp {
     output_devices: Vec<String>,
     settings_open: bool,
     settings_page: usize,
+    sidebar_open: bool,
+    focus_mode: bool,
+    chat_search_open: bool,
+    chat_search: String,
+    voice_started_at: Option<Instant>,
+    last_notice: Option<(String, Instant)>,
 }
 
 impl Default for FriendsApp {
@@ -177,13 +183,21 @@ impl Default for FriendsApp {
             output_devices: voice::list_output_devices(),
             settings_open: false,
             settings_page: 0,
+            sidebar_open: true,
+            focus_mode: false,
+            chat_search_open: false,
+            chat_search: String::new(),
+            voice_started_at: None,
+            last_notice: None,
         }
     }
 }
 
 impl FriendsApp {
     fn notice(&mut self, text: impl Into<String>) {
-        self.messages.push(ChatEntry { name: String::new(), text: text.into(), system: true });
+        let text = text.into();
+        self.last_notice = Some((text.clone(), Instant::now()));
+        self.messages.push(ChatEntry { name: String::new(), text, system: true });
         if self.messages.len() > 600 { self.messages.remove(0); }
     }
 
@@ -261,6 +275,7 @@ impl FriendsApp {
             self.video_textures.clear();
             self.video_seen.clear();
             self.voice.take();
+            self.voice_started_at = None;
             if let Some(mesh) = &self.mesh { mesh.voice(false); }
             self.notice("Ти вийшов(-ла) з голосового каналу.");
             return;
@@ -281,6 +296,7 @@ impl FriendsApp {
         ) {
             Ok(voice) => {
                 self.voice = Some(voice);
+                self.voice_started_at = Some(Instant::now());
                 mesh.voice(true);
                 match VideoSession::start(
                     mesh.id, Arc::clone(&mesh.voice_targets),
@@ -376,9 +392,32 @@ impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_events();
         self.poll_video(ctx);
-        if self.voice.is_some() && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::M)) {
+        let shortcuts = ctx.input(|i| {
+            let ctrl = i.modifiers.ctrl && !i.modifiers.alt;
+            (
+                ctrl && i.key_pressed(egui::Key::M),
+                ctrl && i.key_pressed(egui::Key::B),
+                ctrl && i.key_pressed(egui::Key::E),
+                ctrl && i.key_pressed(egui::Key::F),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if shortcuts.0 && self.voice.is_some() {
             let mic = self.mic_enabled.load(Ordering::Relaxed);
             self.mic_enabled.store(!mic, Ordering::Relaxed);
+        }
+        if shortcuts.1 { self.sidebar_open = !self.sidebar_open; }
+        if shortcuts.2 { self.focus_mode = !self.focus_mode; }
+        if shortcuts.3 { self.chat_search_open = true; self.focus_mode = false; }
+        if shortcuts.4 {
+            if self.chat_search_open {
+                self.chat_search_open = false;
+                self.chat_search.clear();
+            } else if self.settings_open {
+                self.settings_open = false;
+            } else {
+                self.focus_mode = false;
+            }
         }
         // Lower idle CPU/GPU load, but repaint quickly while in a live call.
         // No network worker depends on the UI frame rate.
@@ -390,9 +429,11 @@ impl eframe::App for FriendsApp {
             180
         };
         ctx.request_repaint_after(Duration::from_millis(repaint_ms));
-        egui::SidePanel::left("sidebar").resizable(false).exact_width(277.0)
-            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
-            .show(ctx, |ui| self.neon_sidebar(ui));
+        if self.sidebar_open {
+            egui::SidePanel::left("sidebar").resizable(false).exact_width(277.0)
+                .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(13.0))
+                .show(ctx, |ui| self.neon_sidebar(ui));
+        }
         if self.settings_open {
             egui::SidePanel::right("settings").resizable(true).default_width(305.0)
                 .width_range(275.0..=370.0)
@@ -421,7 +462,7 @@ fn main() -> eframe::Result<()> {
             .with_icon(branding::icon()),
         ..Default::default()
     };
-    eframe::run_native("Friends Voice 0.9 — Aurora", options, Box::new(|cc| {
+    eframe::run_native("Friends Voice 1.0 — Aurora Studio", options, Box::new(|cc| {
         // Use the native Windows UI font to ensure crisp Ukrainian text. If a
         // Windows installation has no Segoe UI, keep egui's built-in fallback.
         if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
