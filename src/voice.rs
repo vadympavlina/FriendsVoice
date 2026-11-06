@@ -97,8 +97,16 @@ pub struct VoiceSession {
     pub udp_errors: Arc<AtomicU64>,
     /// Independent session volume for each known user (0..=2).
     pub per_peer_volumes: Arc<Mutex<HashMap<u64, f32>>>,
+    active_speakers: Arc<Mutex<HashMap<u64, Instant>>>,
 }
 
+impl VoiceSession {
+    pub fn is_speaking(&self, peer: u64) -> bool {
+        self.active_speakers.lock().ok()
+            .and_then(|s| s.get(&peer).copied())
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(280))
+    }
+}
 impl Drop for VoiceSession {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -215,6 +223,7 @@ impl VoiceSession {
         let samples = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let playback = Arc::new(Mutex::new(HashMap::<u64, SpeakerBuffer>::new()));
         let per_peer_volumes = Arc::new(Mutex::new(HashMap::<u64, f32>::new()));
+        let active_speakers = Arc::new(Mutex::new(HashMap::<u64, Instant>::new()));
 
         let capture_samples = Arc::clone(&samples);
         let capture_level = Arc::clone(&level);
@@ -345,6 +354,7 @@ impl VoiceSession {
         let stop_recv = Arc::clone(&stop);
         let receive_count = Arc::clone(&packets_received);
         let error_count = Arc::clone(&udp_errors);
+        let speaking_ref = Arc::clone(&active_speakers);
         let receive_worker = thread::spawn(move || {
             let mut decoders: HashMap<u64, Decoder> = HashMap::new();
             let mut last_audio: HashMap<u64, Instant> = HashMap::new();
@@ -369,6 +379,14 @@ impl VoiceSession {
                         }
                         let Some(decoder) = decoders.get_mut(&id) else { continue; };
                         if let Ok(samples) = decoder.decode_float(&input[8..n], &mut decoded, false) {
+                            // Track audible speech, not merely that a peer is connected.
+                            let rms = (decoded[..samples].iter().map(|v| v*v).sum::<f32>()
+                                / samples.max(1) as f32).sqrt();
+                            if rms > 0.012 {
+                                if let Ok(mut active) = speaking_ref.lock() {
+                                    active.insert(id, Instant::now());
+                                }
+                            }
                             if let Ok(mut speakers) = playback.lock() {
                                 speakers.entry(id).or_default().add(&decoded[..samples]);
                                 receive_count.fetch_add(1, Ordering::Relaxed);
@@ -395,6 +413,10 @@ impl VoiceSession {
                 if last_cleanup.elapsed() >= Duration::from_secs(5) {
                     last_audio.retain(|_, t| t.elapsed() < Duration::from_secs(10));
                     decoders.retain(|id, _| last_audio.contains_key(id));
+                    if let Ok(mut activity) = speaking_ref.lock() {
+                        activity.retain(|id, t| t.elapsed() < Duration::from_secs(10)
+                            && last_audio.contains_key(id));
+                    }
                     if let Ok(mut speakers) = playback.lock() {
                         speakers.retain(|id, _| last_audio.contains_key(id));
                     }
@@ -414,6 +436,7 @@ impl VoiceSession {
             packets_received,
             udp_errors,
             per_peer_volumes,
+            active_speakers,
         })
     }
 }
