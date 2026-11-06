@@ -651,6 +651,20 @@ mod tests {
     }
 
     #[test]
+    fn opus_loss_concealment_without_audio_device() {
+        let mut enc = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip).unwrap();
+        let mut dec = Decoder::new(SAMPLE_RATE, Channels::Mono).unwrap();
+        let wave = [0.1f32; FRAME_SIZE];
+        let mut bytes = [0u8; 1100];
+        let size = enc.encode_float(&wave, &mut bytes).unwrap();
+        let mut decoded = [0f32; FRAME_SIZE];
+        assert_eq!(dec.decode_float(&bytes[..size], &mut decoded, false).unwrap(), FRAME_SIZE);
+        let mut concealment = [0f32; FRAME_SIZE];
+        assert_eq!(dec.decode_float(&[], &mut concealment, false).unwrap(), FRAME_SIZE);
+        assert!(concealment.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
     fn opus_roundtrip() {
         let mut encoder = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip).unwrap();
         let mut decoder = Decoder::new(SAMPLE_RATE, Channels::Mono).unwrap();

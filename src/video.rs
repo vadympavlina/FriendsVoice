@@ -493,6 +493,32 @@ mod tests {
         assert_eq!(first_seq, next_seq);
     }
     #[test]
+    fn jpeg_real_codec_recovers_frame_after_packet_loss() {
+        let source = RgbImage::from_fn(320, 180, |x,y| {
+            image::Rgb([x as u8,y as u8, 120])
+        });
+        let mut compressed = Vec::new();
+        JpegEncoder::new_with_quality(&mut compressed, 46).encode(
+            source.as_raw(), 320, 180, ExtendedColorType::Rgb8
+        ).unwrap();
+        assert!(compressed.len() < MAX_JPEG_BYTES);
+        let pieces = make_fragments(77, 8, 66, &compressed).unwrap();
+        let total = pieces.len()-1;
+        assert!(total > 2);
+        let mut assembler = Assembly::new(8, 66, total);
+        let mut jpg = None;
+        for (i, piece) in pieces.iter().enumerate().rev() {
+            if i == 1 { continue; } // simulate one lost fragment
+            let (_, _, _, part, _, payload) = parse_fragment(piece).unwrap();
+            if let Some(frame) = assembler.insert(part, payload) { jpg = Some(frame); }
+        }
+        assert!(assembler.recovered);
+        let frame = decode_jpeg(77, &jpg.unwrap()).unwrap();
+        assert_eq!((frame.sender_id,frame.width,frame.height),(77,320,180));
+        assert_eq!(frame.rgb.len(),320*180*3);
+    }
+
+    #[test]
     fn reject_oversized_bad_packets() {
         assert!(make_fragments(2,81,1,&vec![0;MAX_JPEG_BYTES+1]).is_none());
         assert!(parse_fragment(&[MAGIC,0]).is_none());
