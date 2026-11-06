@@ -2,7 +2,7 @@ name: Friends Voice Windows builds
 
 on:
   push:
-    branches: [main, 'dev/**', 'fix/**']
+    branches: [main, 'dev/**']
     tags: ['v*']
   workflow_dispatch:
 
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   windows-x64:
-    name: Build and smoke-test Windows x64
+    name: Build and test serverless Windows x64
     runs-on: windows-latest
     steps:
       - name: Checkout source
@@ -25,19 +25,15 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Rust unit and integration tests
+      - name: Run Rust tests (mesh, node departure, Opus)
         shell: pwsh
         run: cargo test --release --target x86_64-pc-windows-msvc
 
-      - name: Compile native Windows apps
+      - name: Compile native Windows app
         shell: pwsh
         run: cargo build --release --target x86_64-pc-windows-msvc
 
-      - name: Smoke-test the TCP server
-        shell: pwsh
-        run: ./scripts/smoke-test.ps1
-
-      - name: Package portable release (client + server)
+      - name: Package portable serverless application
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -45,8 +41,6 @@ jobs:
           $output = 'dist/FriendsVoice-Windows-x64'
           New-Item -ItemType Directory -Force $output | Out-Null
           Copy-Item "$source/friends-voice.exe" "$output/friends-voice.exe"
-          Copy-Item "$source/friends-voice-server.exe" "$output/friends-voice-server.exe"
-          Copy-Item 'scripts/start-server.cmd' "$output/start-server.cmd"
           Copy-Item 'TESTING-README.txt' "$output/README.txt"
           Compress-Archive -Path "$output/*" -DestinationPath 'dist/FriendsVoice-Windows-x64.zip' -Force
 
@@ -65,8 +59,10 @@ jobs:
           tag_name: test-${{ github.run_number }}
           name: Friends Voice - Test build ${{ github.run_number }}
           body: |
-            Automated Windows test build from commit ${{ github.sha }}.
-            Download FriendsVoice-Windows-x64.zip. Voice requires TCP 45888 and UDP 45889.
+            Serverless P2P Windows build from ${{ github.sha }}.
+            Download FriendsVoice-Windows-x64.zip (only one EXE). Radmin VPN required.
+            Every peer must allow inbound UDP 45888 for presence/chat and UDP 45889 for voice.
+            If auto-discovery doesn't work, add any online friend's Radmin IPv4 once.
           prerelease: true
           make_latest: false
           files: dist/FriendsVoice-Windows-x64.zip

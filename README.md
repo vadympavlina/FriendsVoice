@@ -1,47 +1,46 @@
-# Friends Voice 0.2.1 — приватний Discord для друзів
+# Friends Voice 0.3 — децентралізований P2P-месенджер
 
-Native Windows 10/11 desktop app in **Rust**, with **Radmin VPN**, max **five friends**. No Electron, no public server, no hosting bill.
+**Повністю без сервера:** кожен Windows 10/11 комп'ютер запускає один `friends-voice.exe` і може незалежно підключатися/відключатися. Якщо один друг вийде, решта спілкуються далі. До п'яти учасників. Мережа — Radmin VPN.
 
-## Download
+## Готовий Windows-реліз
 
-Open [GitHub Releases](https://github.com/vadympavlina/FriendsVoice/releases). Download **FriendsVoice-Windows-x64.zip** from the newest successful test release; extract and run the included executables. You do **not** need Rust, Visual Studio, Cargo or a local compiler.
+Завантаж останній успішний тестовий реліз: [GitHub Releases](https://github.com/vadympavlina/FriendsVoice/releases). У ZIP тільки `friends-voice.exe` та інструкція. Не потрібні Rust, Visual Studio, серверні вікна чи паролі кімнат.
 
-## Stability improvements in v0.2.1\n\n- Established TCP connections now use blocking reads without a short timeout; clean shutdown happens through the writer socket.\n- The client reports whether the server closed the connection, sent bad data, or caused a socket error.\n- The server logs a specific reason when each user disconnects.\n- A new idle-connection regression test runs before the voice-relay test.\n\n## Main features
+## Як під'єднатися
 
-- Modern dark UI on `egui`.
-- Native voice chat: capture/playback via WASAPI (`cpal`) and compressed Opus audio (48 kHz mono, 20 ms frames).
-- Private voice relay over UDP, with random 128-bit credentials minted after the TCP room login. Up to **five** connected friends.
-- Mute / deafen and Ctrl+M shortcut, microphone input meter, volume control and selectable audio devices.
-- Text chat, connection status, online participants and an access password.
-- Remembers host, nickname and device settings in `%APPDATA%/FriendsVoice/settings.json`, **never** the room password.
-- Automatic Windows x64 builds, unit / integration tests and releases.
+1. Підключись до однієї **приватної** мережі Radmin VPN з друзями.
+2. Усі запускають `friends-voice.exe`. Стан P2P з'являється автоматично.
+3. Програма намагається знайти сусідів по Radmin VPN через UDP broadcast (на деяких VPN-маршрутах це може не працювати).
+4. Якщо когось не видно, вкажи адресу **одного** друга `26.x.x.x` у полі «Знайти за IP». Адреса запам'ятовується. Друзі обмінюються списком знайдених адрес і формують повну mesh-мережу.
+5. Натисни «Приєднатися до голосу» — у голосовому каналі зв'язок безпосередній між ПК.
+6. Будь-хто може вийти з програми чи з голосового каналу; це не впливає на інших.
 
-## Get started
+**Важливо:** тепер потрібні вхідні правила брандмауера для **UDP 45888** (пошук і чат) та **UDP 45889** (голос) на **кожному** комп'ютері. Не відкривай порти у публічний інтернет і не використовуйте публічні мережі Radmin VPN.
 
-1. All friends join the same Radmin VPN private network.
-2. On one PC, run `start-server.cmd`, set a unique room password (8+ characters), and keep the server console open.
-3. Allow **inbound TCP 45888 and UDP 45889** in Windows Firewall on the host for the trusted VPN network. Do not forward public router ports.
-4. Run `friends-voice.exe` on all PCs. Enter host's Radmin VPN IPv4 such as `26.x.x.x:45888`, a unique nickname and room password.
-5. Click **Підключитися**, then **Приєднатися до голосу**. Wear headphones to prevent feedback. Test mute/deafen and the chat.
-6. To test without Radmin VPN, use `127.0.0.1:45888` on the host computer.
+## Технічна архітектура
 
-## Requirements and limits
+- Rust + egui / eframe — нативний Windows UI.
+- P2P Mesh: у кожного клієнта свій UDP-вузол, без лідера й сервера.
+- Presence heartbeat кожні 2 секунди; вузол зникає зі списку через 9 секунд без відповіді.
+- Gossip discovery: знайдений друг повідомляє адреси інших друзів.
+- UDP chat із підтвердженнями ACK та повторною доставкою. Історія між перезапусками поки не синхронізується.
+- Opus 48 кГц / 20 мс + CPAL/WASAPI — голос напряму кожному з максимум чотирьох друзів.
+- Вибір мікрофона й навушників, гучність, mute/deafen, Ctrl+M.
+- Відомі IP-адреси зберігаються в `%APPDATA%\FriendsVoice\mesh-settings.json`.
 
-- Windows 10 or 11, audio hardware with **48 kHz F32 support**.
-- Everyone must be online in Radmin VPN.
-- One host PC acts as server; if it shuts down, the room closes.
-- Basic voice jitter buffering; behavior depends on your network and devices.
-- No webcam, screensharing, system-audio streaming, AEC or automatic noise cancellation yet.
-- The app protocol is **not end-to-end encrypted**. Radmin VPN transports the traffic over its tunnel, but this prototype assumes a trusted private network. Don't reuse important passwords.
+## Обмеження тестової версії
 
-## Development
+- Відео з камери та демонстрація екрана **ще не реалізовані**.
+- Авторизація та шифрування **не реалізовані в самій програмі**: довіряй лише користувачам приватної Radmin VPN мережі. Для довгострокового використання потрібні криптографічні ідентичності та E2EE.
+- Програма використовує порт 45888 й 45889 у кожного учасника, тому Windows Firewall може запитувати дозволу.
+- Деякі мікрофони не підтримують 48 кГц Float32; тоді обери інший аудіопристрій.
+- Для відео й демонстрації екрана у групі з п'яти людей слід оптимізувати кількість потоків і навантаження на мережу.
 
-```powershell
+## Для розробників
+
+```pwsh
 cargo test --release --target x86_64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
-./scripts/smoke-test.ps1
 ```
 
-GitHub Actions compiles the Windows release and validates TCP handshake, group messages, Opus codec and authenticated UDP relay. Use [Actions](https://github.com/vadympavlina/FriendsVoice/actions) to see CI.
-
-Planned: v0.3 webcam / screen share, then encryption, echo suppression, reconnection, better jitter / packet-loss handling.
+Автоматичні Windows-збірки й тести запускаються в GitHub Actions.

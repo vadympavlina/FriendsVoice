@@ -1,42 +1,29 @@
-FRIENDS VOICE 0.2.1 - WINDOWS X64
-=============================
+FRIENDS VOICE 0.3 - WINDOWS 10/11 X64 - FULL P2P
+=================================================
 
-Files:
- friends-voice.exe        - native Windows GUI (Rust + egui)
- friends-voice-server.exe - private TCP chat / UDP voice server
- start-server.cmd         - easiest server launcher
+THIS RELEASE NEEDS NO SERVER, NO start-server.cmd, NO PASSWORD.
+Every computer runs ONLY friends-voice.exe.
 
-TEST ON THE SAME COMPUTER
-1. Open start-server.cmd and set a unique room password (at least 8 characters).
-2. Start friends-voice.exe.
-3. Address: 127.0.0.1:45888. Enter your nickname and room password.
-4. Connect. Chat and the online user list should work.
-5. Press "Приєднатися до голосу" to test local microphone / output device opening.
-6. Press mute / deafen or Ctrl+M to toggle the microphone.
+1. On every computer: connect to the SAME PRIVATE Radmin VPN network.
+2. On every computer: start friends-voice.exe.
+3. Allow inbound UDP port 45888 (discovery/chat) and UDP 45889 (voice)
+   for the trusted Radmin VPN network in Windows Firewall.
+4. Wait until friends appear under "ДРУЗІ В МЕРЕЖІ".
+5. If discovery doesn't find someone, add their Radmin 26.x.x.x IPv4
+   once with "Знайти за IP". The app saves known friend IPs and shares
+   peer addresses to form an independent mesh.
+6. Click "Приєднатися до голосу" only when you want to talk.
+7. Send messages in the chat without joining voice.
+8. Test with THREE PCs: after all are connected, exit the application
+   on one PC. The two remaining peers should keep talking normally.
 
-TEST WITH TWO WINDOWS PCS AND RADMIN VPN
-1. Connect both computers to the same private Radmin VPN network.
-2. Only one host needs to run start-server.cmd (leave it open).
-3. On the other PC use the host's Radmin VPN IPv4: 26.x.x.x:45888.
-4. On host and client launch friends-voice.exe and join with different nicknames.
-5. Both friends click "Приєднатися до голосу" to start 2-way audio.
-6. Wear headphones to avoid echo.
-
-Windows Firewall may need inbound TCP 45888 and UDP 45889 on the HOST.
-Do NOT expose these ports to the public internet.
-If your mic doesn't start, open audio settings and select a 48 kHz-capable device.
-Audio devices require F32 format at 48 kHz in this release.
-
-FIXED IN 0.2.1\n- More reliable TCP connections while voice chat is active or idle.\n- More specific disconnect message in the client.\n- Server now logs why a client disconnected.\n\nWHAT'S NEW
-- Native real-time voice calls with Opus codec, private UDP relay for up to 5 people.
-- Mute / deafen, mic meter, volume, Ctrl+M shortcut, input/output choice.
-- Redesigned dark interface, remembered address, nickname and device settings.
-- Server checks per-session random voice tokens; only logged-in users relay audio.
-- Chat, online users and guest password.
-
-LIMITATIONS
-- No webcam or screen share yet.
-- Encryption is provided by the Radmin VPN tunnel only; the app transport is
-  not end-to-end encrypted. Use only inside a trusted VPN and do not reuse passwords.
-- No echo cancellation; wear headphones.
-- This test version may need manual Windows Firewall allowances.
+This is a beta:
+ - Voice/chat: implemented. Camera and screen sharing: not implemented.
+ - UDP discovery relies on virtual-network broadcast support; manual IP
+   fallback is provided for Radmin networks that do not relay broadcast.
+ - The app does not encrypt or authenticate at the application layer.
+   Radmin VPN is the trust boundary. Do NOT use public Radmin networks.
+ - The chat is reliable while peers are online, but history is not synced.
+ - Up to five computers. Voice uses Opus with default Windows 48 kHz F32 devices.
+ - Wear headphones: no echo cancellation yet.
+ - If a peer disappears, it can take up to nine seconds to be removed.
