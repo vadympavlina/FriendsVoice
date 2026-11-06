@@ -1,37 +1,36 @@
-FRIENDS VOICE 0.6 - QUALITY EDITION - WINDOWS 10/11 X64
-=========================================================
+FRIENDS VOICE 0.7 - CLEAR VOICE + VIDEO PACKET RECOVERY
+==========================================================
 
-Serverless Rust desktop app for up to FIVE friends connected to one
-trusted PRIVATE Radmin VPN network. Extract ZIP and run friends-voice.exe.
-No separate server process; each peer operates independently.
+One native Rust .exe, no separate server. For 2-5 friends in the same
+TRUSTED PRIVATE Radmin VPN network (Windows 10/11 x64).
 
-TEST THIS RELEASE:
-1. All friends upgrade to this SAME version. Close older instances.
-2. Connect to one private Radmin VPN network. Add a friend's 26.x.x.x IP
-   under "Знайти за IP" only if discovery is not working.
-3. Windows Firewall per PC: inbound UDP 45888 discovery/chat,
-   UDP 45889 voice, UDP 45890 camera. Permit only trusted VPN traffic;
-   never forward these ports to the public internet.
-4. Join voice. Test F9 mute, Ctrl+M, and optional Push-to-Talk under
-   Settings -> Audio (F8 default; F6/F7/F10/F11/F12/Mouse4/Mouse5).
-5. In Settings -> Audio change individual friend volume 0–200%.
-   Other friends should not be affected by your personal volume.
-6. In Settings -> Video select camera 1–4 (index, not device name),
-   then click camera to stream. Try three profiles:
-       Saver    320x180 @ max 5 fps
-       Balanced 320x180 @ max 9 fps
-       Sharper  480x270 @ max 8 fps
-   Switch camera/quality during a call. Audio should stay connected.
-7. Test with 3-5 people, including someone leaving and coming back.
-   Verify chat/voice continue and stale camera images disappear.
-8. Test with a still scene: video traffic should be reduced while
-   camera preview remains visible locally. Changes should stream.
+NEW IN v0.7
+- Optional noise gate: Settings > Audio > Розумна активація голосом.
+  Use the sensitivity slider if voice starts or ends are cut off.
+  This setting is OFF by default and does not affect Push-to-Talk.
+- JPEG video adds one extra XOR parity packet per multi-part frame to
+  reconstruct a frame after ONE lost UDP fragment.
+- Video modes and per-friend audio sliders from v0.6 remain available.
+- Added audio noise gate and video parity regression tests.
+
+TEST SCENARIO:
+1. Close old Friends Voice programs and extract this release on ALL PCs.
+2. Join the same trusted Radmin VPN network.
+3. If needed, allow inbound UDP 45888 (presence/chat), UDP 45889
+   (Opus audio), UDP 45890 (webcam) for trusted Radmin VPN traffic.
+4. With three peers connected, first test ordinary always-on voice.
+5. Open Settings > Audio, enable optional noise gate, set sensitivity
+   near the left side. Speak loudly, softly and pause between words.
+   If syllables disappear, lower threshold or disable the gate.
+6. Test Push-to-Talk with F8 (or another chosen key) and F9 mute.
+7. Enable at least two cameras; try all three video profiles and
+   verify voice remains stable while video is active.
+8. Have one friend leave and return while the others remain in voice.
 
 LIMITATIONS:
-- Webcam video is beta JPEG/UDP, not H.264/WebRTC, no A/V sync or
-  adaptive bandwidth control. Good lighting/low motion helps.
-- Camera picker shows numbers 1–4, not Windows device names.
-- Screen sharing is NOT implemented; button is disabled.
-- No application-level encryption or user authentication. Only use
-  trusted private Radmin VPN networks.
-- Headphones are recommended (echo cancellation not yet included).
+- Camera is still experimental JPEG/UDP; one parity fragment recovers
+  ONE lost data packet, not multiple drops or persistent network loss.
+- Screen sharing not implemented yet.
+- No app-level end-to-end encryption or identity verification: private,
+  trusted Radmin VPN only. Never expose the ports to the Internet.
+- Use headphones: automatic echo cancellation not available yet.
