@@ -32,6 +32,7 @@ struct Settings {
     input_device: String,
     output_device: String,
     volume: f32,
+    push_to_talk: bool,
 }
 
 impl Default for Settings {
@@ -42,6 +43,7 @@ impl Default for Settings {
             input_device: String::new(),
             output_device: String::new(),
             volume: 1.0,
+            push_to_talk: false,
         }
     }
 }
@@ -93,6 +95,7 @@ pub struct FriendsApp {
     messages: Vec<ChatEntry>,
     voice: Option<VoiceSession>,
     mic_enabled: Arc<AtomicBool>,
+    push_to_talk: Arc<AtomicBool>,
     deafened: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
     input_devices: Vec<String>,
@@ -124,6 +127,7 @@ impl Default for FriendsApp {
             }],
             voice: None,
             mic_enabled: Arc::new(AtomicBool::new(true)),
+            push_to_talk: Arc::new(AtomicBool::new(settings.push_to_talk)),
             deafened: Arc::new(AtomicBool::new(false)),
             input_devices: voice::list_input_devices(),
             output_devices: voice::list_output_devices(),
@@ -220,6 +224,7 @@ impl FriendsApp {
             &self.settings.input_device,
             &self.settings.output_device,
             Arc::clone(&self.mic_enabled),
+            Arc::clone(&self.push_to_talk),
             Arc::clone(&self.deafened),
             Arc::clone(&self.volume),
         ) {

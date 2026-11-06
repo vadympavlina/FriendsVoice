@@ -16,6 +16,24 @@ use std::{
 };
 
 const SAMPLE_RATE: u32 = 48_000;
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetAsyncKeyState(vkey: i32) -> i16;
+}
+/// Global keyboard state: works even while a game holds the window focus.
+#[inline]
+fn key_is_down(vkey: i32) -> bool {
+    #[cfg(target_os = "windows")]
+    { unsafe { (GetAsyncKeyState(vkey) as u16 & 0x8000) != 0 } }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = vkey; false }
+}
+pub const PTT_VK: i32 = 0x77; // F8
+pub const MUTE_VK: i32 = 0x78; // F9
+fn allowed_to_transmit(master_on: bool, push_to_talk: bool, key_down: bool) -> bool {
+    master_on && (!push_to_talk || key_down)
+}
 const FRAME_SIZE: usize = 960; // 20 ms at 48 kHz
 const MAX_AUDIO_QUEUE: usize = 8 * FRAME_SIZE;
 
@@ -58,6 +76,7 @@ pub struct VoiceSession {
     send_worker: Option<thread::JoinHandle<()>>,
     receive_worker: Option<thread::JoinHandle<()>>,
     pub microphone_level: Arc<AtomicU32>,
+    pub transmitting: Arc<AtomicBool>,
     pub packets_sent: Arc<AtomicU64>,
     pub packets_received: Arc<AtomicU64>,
     pub udp_errors: Arc<AtomicU64>,
@@ -136,6 +155,7 @@ impl VoiceSession {
         input_name: &str,
         output_name: &str,
         mic_enabled: Arc<AtomicBool>,
+        push_to_talk: Arc<AtomicBool>,
         deafened: Arc<AtomicBool>,
         volume: Arc<AtomicU32>,
     ) -> Result<Self, String> {
@@ -169,6 +189,7 @@ impl VoiceSession {
         let stop = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0f32.to_bits()));
         let packets_sent = Arc::new(AtomicU64::new(0));
+        let transmitting = Arc::new(AtomicBool::new(false));
         let packets_received = Arc::new(AtomicU64::new(0));
         let udp_errors = Arc::new(AtomicU64::new(0));
         let samples = Arc::new(Mutex::new(VecDeque::<f32>::new()));
@@ -233,7 +254,9 @@ impl VoiceSession {
         let send_peers = Arc::clone(&peers);
         let stop_send = Arc::clone(&stop);
         let sent_count = Arc::clone(&packets_sent);
+        let tx_indicator = Arc::clone(&transmitting);
         let send_worker = thread::spawn(move || {
+            let mut last_mute_press = false;
             let Ok(mut encoder) = Encoder::new(SAMPLE_RATE, Channels::Mono, Application::Voip) else {
                 eprintln!("Opus encoder startup failed");
                 return;
@@ -241,6 +264,11 @@ impl VoiceSession {
             let mut payload = [0u8; 1100];
             let mut pcm = [0f32; FRAME_SIZE];
             while !stop_send.load(Ordering::Relaxed) {
+                let mute_pressed = key_is_down(MUTE_VK);
+                if mute_pressed && !last_mute_press {
+                    mic.fetch_xor(true, Ordering::Relaxed);
+                }
+                last_mute_press = mute_pressed;
                 let ready = {
                     let Ok(mut queue) = samples.lock() else { break; };
                     if queue.len() < FRAME_SIZE {
@@ -256,9 +284,14 @@ impl VoiceSession {
                     thread::sleep(Duration::from_millis(4));
                     continue;
                 }
-                if !mic.load(Ordering::Relaxed) {
-                    pcm.fill(0.0);
-                }
+                let should_transmit = allowed_to_transmit(
+                    mic.load(Ordering::Relaxed),
+                    push_to_talk.load(Ordering::Relaxed),
+                    key_is_down(PTT_VK),
+                );
+                tx_indicator.store(should_transmit, Ordering::Relaxed);
+                // No Opus work or UDP traffic while muted or PTT key is released.
+                if !should_transmit { continue; }
                 if let Ok(n) = encoder.encode_float(&pcm, &mut payload) {
                     let mut packet = Vec::with_capacity(8 + n);
                     packet.extend_from_slice(&my_id.to_be_bytes());
@@ -329,6 +362,7 @@ impl VoiceSession {
             send_worker: Some(send_worker),
             receive_worker: Some(receive_worker),
             microphone_level: level,
+            transmitting,
             packets_sent,
             packets_received,
             udp_errors,
@@ -339,6 +373,14 @@ impl VoiceSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ptt_logic() {
+        assert!(allowed_to_transmit(true, false, false));
+        assert!(!allowed_to_transmit(false, false, true));
+        assert!(!allowed_to_transmit(true, true, false));
+        assert!(allowed_to_transmit(true, true, true));
+    }
 
     #[test]
     fn windows_udp_icmp_reset_is_recoverable() {

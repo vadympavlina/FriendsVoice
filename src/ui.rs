@@ -462,6 +462,24 @@ impl FriendsApp {
                         self.output_devices=voice::list_output_devices();
                     }
                     ui.add_space(12.0);
+                    ui.add_space(8.0);
+                    section(ui,"АКТИВАЦІЯ МІКРОФОНА");
+                    let mut ptt = self.push_to_talk.load(Ordering::Relaxed);
+                    if ui.checkbox(&mut ptt,"Push-to-Talk (утримувати F8)").changed() {
+                        self.push_to_talk.store(ptt, Ordering::Relaxed);
+                        self.settings.push_to_talk = ptt;
+                        save_settings(&self.settings);
+                    }
+                    ui.label(text_caption("F9 — увімкнути/вимкнути мікрофон навіть під час гри."));
+                    ui.label(text_caption("Ctrl+M — перемикання всередині Friends Voice."));
+                    if let Some(voice) = &self.voice {
+                        ui.label(RichText::new(if voice.transmitting.load(Ordering::Relaxed) {
+                            "● Зараз передаєш голос"
+                        } else if ptt { "○ Натисни й утримуй F8, щоб говорити" } else {
+                            "○ Передача вимкнена або немає голосового каналу"
+                        }).size(11.0).color(if voice.transmitting.load(Ordering::Relaxed){GREEN}else{SOFT}));
+                    }
+                    ui.add_space(9.0);
                     ui.label(RichText::new("Гучність відтворення").size(12.0).color(BRIGHT));
                     let mut value=f32::from_bits(self.volume.load(Ordering::Relaxed)).clamp(0.0,2.0);
                     if ui.add(egui::Slider::new(&mut value,0.0..=2.0)
