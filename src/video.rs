@@ -49,6 +49,8 @@ pub enum VideoEvent {
 struct Assembly {
     seq: u32,
     parts: Vec<Option<Vec<u8>>>,
+    /// One XOR parity fragment can reconstruct one missing UDP packet.
+    parity: Option<(usize, Vec<u8>)>,
     updated: Instant,
 }
 impl Assembly {
@@ -56,22 +58,50 @@ impl Assembly {
         Self {
             seq,
             parts: vec![None; total],
+            parity: None,
             updated: Instant::now(),
         }
     }
     fn insert(&mut self, part: usize, bytes: &[u8]) -> Option<Vec<u8>> {
-        if part >= self.parts.len() || bytes.len() > CHUNK { return None; }
-        self.parts[part].get_or_insert_with(|| bytes.to_vec());
-        self.updated = Instant::now();
-        if self.parts.iter().all(Option::is_some) {
-            let mut result = Vec::with_capacity(self.parts.len() * CHUNK);
-            for p in self.parts.iter_mut() {
-                result.extend_from_slice(p.take().as_ref()?);
-            }
-            (result.len() <= MAX_JPEG_BYTES).then_some(result)
+        let count = self.parts.len();
+        if part == count {
+            // Parity payload: 4-byte original JPEG length plus CHUNK XOR bytes.
+            if count < 2 || bytes.len() != CHUNK + 4 { return None; }
+            let total_len = u32::from_be_bytes(bytes[..4].try_into().ok()?) as usize;
+            if total_len > MAX_JPEG_BYTES
+                || total_len <= (count - 1) * CHUNK
+                || total_len > count * CHUNK { return None; }
+            self.parity = Some((total_len, bytes[4..].to_vec()));
         } else {
-            None
+            if part >= count || bytes.is_empty() || bytes.len() > CHUNK { return None; }
+            self.parts[part].get_or_insert_with(|| bytes.to_vec());
         }
+        self.updated = Instant::now();
+        let missing = self.parts.iter().enumerate()
+            .filter_map(|(i, p)| p.is_none().then_some(i))
+            .collect::<Vec<_>>();
+        if missing.len() == 1 {
+            if let Some((total_len, xor)) = self.parity.as_ref() {
+                let index = missing[0];
+                let mut recovered = xor.clone();
+                for piece in self.parts.iter().filter_map(|p| p.as_ref()) {
+                    for (i, byte) in piece.iter().enumerate() {
+                        recovered[i] ^= byte;
+                    }
+                }
+                let expected = if index == count - 1 {
+                    total_len - (count - 1) * CHUNK
+                } else { CHUNK };
+                recovered.truncate(expected);
+                self.parts[index] = Some(recovered);
+            }
+        }
+        if self.parts.iter().any(Option::is_none) { return None; }
+        let mut result = Vec::with_capacity(count * CHUNK);
+        for part in self.parts.iter_mut() {
+            result.extend_from_slice(part.take().as_ref()?);
+        }
+        (result.len() <= MAX_JPEG_BYTES).then_some(result)
     }
 }
 // Wrapping sequence order handles a long-running call and ignores delayed fragments.
@@ -83,8 +113,12 @@ fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
     if jpg.is_empty() || jpg.len() > MAX_JPEG_BYTES { return None; }
     let total = jpg.len().div_ceil(CHUNK);
     if total > MAX_CHUNKS { return None; }
-    let mut result = Vec::with_capacity(total);
+    let mut result = Vec::with_capacity(total + usize::from(total > 1));
+    let mut parity = [0u8; CHUNK];
     for (part, bytes) in jpg.chunks(CHUNK).enumerate() {
+        for (i, byte) in bytes.iter().enumerate() {
+            parity[i] ^= byte;
+        }
         let mut datagram = Vec::with_capacity(HEADER + bytes.len());
         datagram.push(MAGIC);
         datagram.extend_from_slice(&id.to_be_bytes());
@@ -94,16 +128,32 @@ fn make_fragments(id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<Vec<u8>>> {
         datagram.extend_from_slice(bytes);
         result.push(datagram);
     }
+    if total > 1 {
+        // Backwards compatible: older receivers ignore part == total.
+        let mut datagram = Vec::with_capacity(HEADER + 4 + CHUNK);
+        datagram.push(MAGIC);
+        datagram.extend_from_slice(&id.to_be_bytes());
+        datagram.extend_from_slice(&seq.to_be_bytes());
+        datagram.push(total as u8); // reserved index identifies parity
+        datagram.push(total as u8);
+        datagram.extend_from_slice(&(jpg.len() as u32).to_be_bytes());
+        datagram.extend_from_slice(&parity);
+        result.push(datagram);
+    }
     Some(result)
 }
 fn parse_fragment(datagram: &[u8]) -> Option<(u64, u32, usize, usize, &[u8])> {
-    if datagram.len() <= HEADER || datagram.len() > HEADER + CHUNK || datagram[0] != MAGIC { return None; }
+    if datagram.len() <= HEADER || datagram.len() > HEADER + CHUNK + 4 || datagram[0] != MAGIC { return None; }
     let sender = u64::from_be_bytes(datagram[1..9].try_into().ok()?);
     let seq = u32::from_be_bytes(datagram[9..13].try_into().ok()?);
     let part = datagram[13] as usize;
     let total = datagram[14] as usize;
-    if total == 0 || total > MAX_CHUNKS || part >= total { return None; }
-    Some((sender, seq, part, total, &datagram[HEADER..]))
+    if total == 0 || total > MAX_CHUNKS || part > total { return None; }
+    let payload = &datagram[HEADER..];
+    if part == total {
+        if total < 2 || payload.len() != CHUNK + 4 { return None; }
+    } else if payload.is_empty() || payload.len() > CHUNK { return None; }
+    Some((sender, seq, part, total, payload))
 }
 fn decode_jpeg(id: u64, data: &[u8]) -> Option<VideoFrame> {
     if data.len() > MAX_JPEG_BYTES || data.is_empty() { return None; }
@@ -350,17 +400,49 @@ mod tests {
     }
     #[test]
     fn fragments_roundtrip_and_out_of_order() {
-        let jpg = vec![34u8; 10_987];
+        let jpg = (0..10_987).map(|i| (i % 251) as u8).collect::<Vec<_>>();
         let parts = make_fragments(7654, 99, &jpg).unwrap();
-        assert!(parts.len()>1);
-        let mut assembly = Assembly::new(99, parts.len());
+        assert!(parts.len()>2);
+        let total = parts.len() - 1;
+        let mut assembly = Assembly::new(99, total);
         let mut result = None;
         for part in parts.iter().rev() {
-            let (id,seq,idx,total,payload) = parse_fragment(part).unwrap();
-            assert_eq!((id,seq,total),(7654,99,parts.len()));
+            let (id,seq,idx,count,payload) = parse_fragment(part).unwrap();
+            assert_eq!((id,seq,count),(7654,99,total));
             if let Some(done) = assembly.insert(idx,payload) { result = Some(done); }
         }
         assert_eq!(result.unwrap(),jpg);
+    }
+
+    #[test]
+    fn parity_recovers_one_lost_fragment_any_position() {
+        let jpg = (0..17_777).map(|i| ((i * 17) % 251) as u8).collect::<Vec<_>>();
+        let fragments = make_fragments(45, 17, &jpg).unwrap();
+        let total = fragments.len() - 1;
+        for dropped in [0, total / 2, total - 1] {
+            let mut assembly = Assembly::new(17, total);
+            let mut reconstructed = None;
+            for (i, fragment) in fragments.iter().enumerate().rev() {
+                if i == dropped { continue; }
+                let (_, _, part, _, payload) = parse_fragment(fragment).unwrap();
+                if let Some(bytes) = assembly.insert(part, payload) {
+                    reconstructed = Some(bytes);
+                }
+            }
+            assert_eq!(reconstructed, Some(jpg.clone()), "missing fragment {dropped}");
+        }
+    }
+
+    #[test]
+    fn parity_does_not_claim_to_recover_two_missing_packets() {
+        let fragments = make_fragments(45, 17, &vec![7u8; 9_999]).unwrap();
+        let total = fragments.len() - 1;
+        let mut assembly = Assembly::new(17, total);
+        for (i, fragment) in fragments.iter().enumerate() {
+            if i < 2 { continue; }
+            let (_, _, part, _, payload) = parse_fragment(fragment).unwrap();
+            assert!(assembly.insert(part, payload).is_none());
+        }
     }
     #[test]
     fn reject_oversized_bad_packets() {
