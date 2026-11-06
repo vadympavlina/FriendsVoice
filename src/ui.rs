@@ -1,5 +1,5 @@
 //! Native egui desktop design. Every interactive element is wired to the existing P2P client.
-//! Camera and screen-share controls are visibly unavailable until their codecs exist.
+//! Webcam tiles are live when enabled; screen-sharing remains visibly disabled.
 use super::*;
 use eframe::egui::{self, Align2, FontId, Pos2, Rect, Response, RichText, Rounding, Sense, Stroke, Ui, Vec2};
 
@@ -928,7 +928,13 @@ impl FriendsApp {
             let gap=11.0;
             let visible=self.peers.len().saturating_add(1).min(MAX_NODES);
             let total=visible.max(if columns>1{columns}else{1}).min(MAX_NODES);
-            let gallery_height=((ui.available_height()-310.0)*0.8).clamp(135.0,340.0);
+            let rows=total.div_ceil(columns);
+            let regular_tile_width=((gallery_width-gap*(columns-1) as f32)
+                /columns as f32).max(110.0);
+            let row_height=(regular_tile_width*0.53).clamp(132.0,197.0);
+            let needed_height=rows as f32*row_height+rows.saturating_sub(1) as f32*gap;
+            let max_gallery_height=((ui.available_height()-310.0)*0.8).clamp(135.0,340.0);
+            let gallery_height=needed_height.min(max_gallery_height);
             egui::ScrollArea::vertical()
                 .id_salt("aurora_gallery")
                 .max_height(gallery_height)
