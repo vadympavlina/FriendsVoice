@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 pub const CONTROL_PORT: u16 = 45888;
 pub const AUDIO_PORT: u16 = 45889;
 pub const VIDEO_PORT: u16 = 45890;
+/// H.264 stream port: HD camera and screen sharing.
+pub const STREAM_PORT: u16 = 45891;
 pub const MAX_NODES: usize = 5;
 /// Media packet layout changed in 0.8: every participant must upgrade.
 pub const PROTOCOL_VERSION: u16 = 8;

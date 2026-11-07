@@ -1,3 +1,4 @@
+use crate::i18n::{tr, trf};
 use crate::protocol::AUDIO_PORT;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -28,6 +29,44 @@ fn key_is_down(vkey: i32) -> bool {
     { unsafe { (GetAsyncKeyState(vkey) as u16 & 0x8000) != 0 } }
     #[cfg(not(target_os = "windows"))]
     { let _ = vkey; false }
+}
+/// Every key or mouse button currently held, as Windows virtual-key codes.
+/// Left and right mouse buttons are skipped so clicking the UI never binds them,
+/// and the generic Shift/Ctrl/Alt codes are skipped in favour of the left/right ones.
+pub fn pressed_keys() -> Vec<i32> {
+    (0x03..=0xFE)
+        .filter(|vk| !(0x10..=0x12).contains(vk))
+        .filter(|vk| key_is_down(*vk))
+        .collect()
+}
+
+/// Human-readable name of a virtual-key code for the settings screen.
+pub fn vk_name(vk: i32) -> String {
+    match vk {
+        0x03 => "Cancel".into(), 0x04 => tr("Middle mouse button").into(),
+        0x05 => tr("Mouse 4 (side)").into(), 0x06 => tr("Mouse 5 (side)").into(),
+        0x08 => "Backspace".into(), 0x09 => "Tab".into(), 0x0D => "Enter".into(),
+        0x13 => "Pause".into(), 0x14 => "Caps Lock".into(), 0x1B => "Esc".into(),
+        0x20 => tr("Space").into(), 0x21 => "Page Up".into(), 0x22 => "Page Down".into(),
+        0x23 => "End".into(), 0x24 => "Home".into(), 0x25 => "←".into(),
+        0x26 => "↑".into(), 0x27 => "→".into(), 0x28 => "↓".into(),
+        0x2C => "Print Screen".into(), 0x2D => "Insert".into(), 0x2E => "Delete".into(),
+        0x30..=0x39 => ((vk as u8) as char).to_string(),
+        0x41..=0x5A => ((vk as u8) as char).to_string(),
+        0x5B => "Left Win".into(), 0x5C => "Right Win".into(), 0x5D => "Menu".into(),
+        0x60..=0x69 => format!("Num {}", vk - 0x60),
+        0x6A => "Num *".into(), 0x6B => "Num +".into(), 0x6D => "Num −".into(),
+        0x6E => "Num .".into(), 0x6F => "Num /".into(),
+        0x70..=0x87 => format!("F{}", vk - 0x6F),
+        0x90 => "Num Lock".into(), 0x91 => "Scroll Lock".into(),
+        0xA0 => "Left Shift".into(), 0xA1 => "Right Shift".into(),
+        0xA2 => "Left Ctrl".into(), 0xA3 => "Right Ctrl".into(),
+        0xA4 => "Left Alt".into(), 0xA5 => "Right Alt".into(),
+        0xBA => ";".into(), 0xBB => "=".into(), 0xBC => ",".into(), 0xBD => "-".into(),
+        0xBE => ".".into(), 0xBF => "/".into(), 0xC0 => "`".into(), 0xDB => "[".into(),
+        0xDC => "\\".into(), 0xDD => "]".into(), 0xDE => "'".into(),
+        other => trf("Key 0x{code}", &[("code", &format!("{other:02X}"))]),
+    }
 }
 pub const PTT_VK: i32 = 0x77; // F8 default, user-selectable
 pub const MUTE_VK: i32 = 0x78; // F9
@@ -168,6 +207,15 @@ pub fn list_output_devices() -> Vec<String> {
     result
 }
 
+/// Finds an output device by name, falling back to the system default.
+pub fn find_output_device(name: &str) -> Option<cpal::Device> {
+    let host = cpal::default_host();
+    if name.is_empty() { return host.default_output_device(); }
+    host.output_devices().ok()
+        .and_then(|mut devices| devices.find(|d| d.name().ok().as_deref() == Some(name)))
+        .or_else(|| host.default_output_device())
+}
+
 fn sample_format_priority(format: SampleFormat) -> usize {
     match format {
         SampleFormat::F32 => 0,
@@ -178,7 +226,7 @@ fn sample_format_priority(format: SampleFormat) -> usize {
 }
 fn input_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
     device.supported_input_configs()
-        .map_err(|e| format!("Налаштування мікрофона: {e}"))?
+        .map_err(|e| trf("Microphone settings: {error}", &[("error", &e)]))?
         .filter(|r| sample_format_priority(r.sample_format()) < 9
             && r.min_sample_rate().0 <= SAMPLE_RATE
             && r.max_sample_rate().0 >= SAMPLE_RATE)
@@ -191,11 +239,11 @@ fn input_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), S
                 buffer_size: cpal::BufferSize::Default,
             }, format)
         })
-        .ok_or_else(|| "Мікрофон не підтримує 48 кГц у форматі F32/I16/U16.".to_string())
+        .ok_or_else(|| tr("The microphone does not support 48 kHz in F32/I16/U16 format.").to_string())
 }
-fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
+pub fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), String> {
     device.supported_output_configs()
-        .map_err(|e| format!("Налаштування динаміків: {e}"))?
+        .map_err(|e| trf("Speaker settings: {error}", &[("error", &e)]))?
         .filter(|r| sample_format_priority(r.sample_format()) < 9
             && r.min_sample_rate().0 <= SAMPLE_RATE
             && r.max_sample_rate().0 >= SAMPLE_RATE)
@@ -208,7 +256,7 @@ fn output_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat), 
                 buffer_size: cpal::BufferSize::Default,
             }, format)
         })
-        .ok_or_else(|| "Навушники не підтримують 48 кГц у форматі F32/I16/U16.".to_string())
+        .ok_or_else(|| tr("The headphones do not support 48 kHz in F32/I16/U16 format.").to_string())
 }
 fn capture_buffer<T: Copy>(
     buffer: &[T],
@@ -275,6 +323,8 @@ fn to_u16(value: f32) -> u16 {
 }
 
 impl VoiceSession {
+    /// Every setting is a shared atomic so the UI can change it while the call is running.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         my_id: u64,
         peers: Arc<Mutex<Vec<Ipv4Addr>>>,
@@ -289,7 +339,7 @@ impl VoiceSession {
         volume: Arc<AtomicU32>,
     ) -> Result<Self, String> {
         let socket = UdpSocket::bind(("0.0.0.0", AUDIO_PORT))
-            .map_err(|e| format!("Не вдалося відкрити голосовий P2P UDP-порт {AUDIO_PORT}: {e}"))?;
+            .map_err(|e| trf("Could not open the voice UDP port {port}: {error}", &[("port", &AUDIO_PORT), ("error", &e)]))?;
         socket.set_read_timeout(Some(Duration::from_millis(200)))
             .map_err(|e| e.to_string())?;
         let receiver = socket.try_clone().map_err(|e| e.to_string())?;
@@ -301,14 +351,14 @@ impl VoiceSession {
             host.input_devices().ok().and_then(|mut devices| {
                 devices.find(|d| d.name().ok().as_deref() == Some(input_name))
             }).or_else(|| host.default_input_device())
-        }.ok_or("Не знайдено мікрофон")?;
+        }.ok_or(tr("Microphone not found"))?;
         let output = if output_name.is_empty() {
             host.default_output_device()
         } else {
             host.output_devices().ok().and_then(|mut devices| {
                 devices.find(|d| d.name().ok().as_deref() == Some(output_name))
             }).or_else(|| host.default_output_device())
-        }.ok_or("Не знайдено пристрій відтворення")?;
+        }.ok_or(tr("Playback device not found"))?;
 
         let (in_config, in_format) = input_config(&input)?;
         let (out_config, out_format) = output_config(&output)?;
@@ -354,8 +404,8 @@ impl VoiceSession {
                         |x| (x as f32 - 32768.0) / 32768.0),
                     |err| eprintln!("Audio input: {err}"), None)
             }
-            _ => return Err("Формат мікрофона не підтримується".into()),
-        }.map_err(|e| format!("Мікрофон: {e}"))?;
+            _ => return Err(tr("Unsupported microphone format").into()),
+        }.map_err(|e| trf("Microphone: {error}", &[("error", &e)]))?;
 
         let output_stream = match out_format {
             SampleFormat::F32 => {
@@ -388,11 +438,11 @@ impl VoiceSession {
                         buf, out_channels, &p, &gains, &deaf, &v, to_u16),
                     |err| eprintln!("Audio output: {err}"), None)
             }
-            _ => return Err("Формат навушників не підтримується".into()),
-        }.map_err(|e| format!("Відтворення: {e}"))?;
+            _ => return Err(tr("Unsupported headphone format").into()),
+        }.map_err(|e| trf("Playback: {error}", &[("error", &e)]))?;
 
-        input_stream.play().map_err(|e| format!("Запуск мікрофона: {e}"))?;
-        output_stream.play().map_err(|e| format!("Запуск динаміків: {e}"))?;
+        input_stream.play().map_err(|e| trf("Could not start the microphone: {error}", &[("error", &e)]))?;
+        output_stream.play().map_err(|e| trf("Could not start the speakers: {error}", &[("error", &e)]))?;
 
         let mic = Arc::clone(&mic_enabled);
         let send_peers = Arc::clone(&peers);
@@ -634,6 +684,23 @@ mod tests {
         assert!(gate.allow(&voice, 0.02));
         for _ in 0..12 { assert!(gate.allow(&silent, 0.02)); }
         assert!(!gate.allow(&silent, 0.02));
+    }
+
+    #[test]
+    fn key_names_are_readable() {
+        assert_eq!(vk_name(0x77), "F8");
+        assert_eq!(vk_name(0x41), "A");
+        assert_eq!(vk_name(0x35), "5");
+        assert_eq!(vk_name(0x05), "Mouse 4 (side)");
+        assert_eq!(vk_name(0x62), "Num 2");
+        assert_eq!(vk_name(0xA2), "Left Ctrl");
+        assert_eq!(vk_name(0x87), "F24");
+        assert!(vk_name(0xE9).starts_with("Key 0x"));
+    }
+    #[test]
+    fn pressed_keys_never_reports_clicks_or_generic_modifiers() {
+        // Nothing is held on a CI machine; the list must simply be valid.
+        assert!(pressed_keys().iter().all(|vk| !matches!(vk, 0x01 | 0x02 | 0x10 | 0x11 | 0x12)));
     }
 
     #[test]

@@ -29,6 +29,55 @@ WEBCAM CHECKLIST (please test on a real PC)
  6. Test a camera that is used by another app: you should get a clear
     message with the Windows privacy hint, not a silent failure.
  7. Test a laptop camera and, if possible, an external USB camera.
+ 8. Settings > Video shows "Camera mode: MJPEG 1280x720..." and the frame
+    counter must keep growing while the camera is on; "not decoded" must
+    stay at 0 (or very low). If it grows, tell us the camera name and mode.
+ 9. Try the HD quality with a friend and watch smoothness.
+
+PUSH-TO-TALK
+ 1. Settings > Sound > Change key: press a letter, an F-key, a numpad key
+    or a side mouse button. The new key is shown and saved.
+ 2. Enable Push-to-Talk, join a call, hold the key: the top bar shows who
+    is talking. F9 cannot be assigned (reserved for the mic toggle).
+
+SCREEN SHARING (Windows 10 1903+ / Windows 11)
+ 1. Join a call with a friend. Press the monitor button in the call bar.
+ 2. Share a whole screen: the friend sees it as the big picture, the other
+    people in a strip. Check text sharpness at 1080p/30 and smoothness while
+    moving a window or scrolling.
+ 3. Share one window (e.g. a browser). Minimise it, close it: sharing must
+    stop with a clear message. Share a game window if possible.
+ 4. Try 60 fps and 1440p; watch the banner: it warns when the PC cannot keep up.
+ 5. Click a small tile to enlarge it, double-click the big one for full screen.
+ 6. Stop sharing from the banner or the call bar. A friend who joins later must
+    see the picture within a second or two.
+
+EXPAND / FULL SCREEN
+ 1. Hover a camera or screen tile: two buttons appear (fill the window / fill
+    the monitor). Double-click a tile also fills the window.
+ 2. F11 toggles full screen; Esc leaves full screen first, then the expanded view.
+ 3. In the expanded view: mouse wheel zooms (up to 600%), drag moves, key 0
+    resets. Controls fade after ~2.5 s without mouse movement.
+ 4. If the friend stops sharing, the expanded view closes by itself.
+
+LANGUAGES
+ 1. First start must be in English. Switch to Українська and Русский on the
+    start screen and in Settings > Profile: every screen must change at once
+    (rail, stage, chat, all settings pages, tooltips, picker).
+ 2. If your name was the default (Friend / Друг) it follows the language.
+ 3. Restart: the chosen language and the window size must be remembered.
+
+CHAT AND NOTIFICATIONS
+ 1. A link such as https://example.com in a message is clickable and opens the
+    browser; punctuation after the link is not part of it.
+ 2. With the window in the background, a friend's message plays a soft sound
+    and flashes the taskbar button.
+ 3. A thin green line above the user bar moves while you speak.
+
+SOUNDS
+ Mic/sound/camera/screen on-off tones, your own join/leave chime, and a
+ distinct bell when a friend joins or leaves. Settings > Sound has a test
+ panel and a volume slider. F9 (global mic) must play the tone too.
 
 GENERAL CHECKLIST
  1. Start at 960x620, 1366x768 and 1920x1080; try 125% and 150% scaling.

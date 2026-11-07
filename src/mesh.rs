@@ -1,3 +1,4 @@
+use crate::i18n::{trf};
 use crate::protocol::{MeshPacket, CONTROL_PORT, MAX_NODES, PROTOCOL_VERSION};
 use get_if_addrs::{get_if_addrs, IfAddr};
 use rand::random;
@@ -118,7 +119,7 @@ fn refresh(
     voice_targets: &Arc<Mutex<Vec<Ipv4Addr>>>,
 ) {
     let mut list = peers.values().map(|p| p.view.clone()).collect::<Vec<_>>();
-    list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    list.sort_by_key(|p| p.name.to_lowercase());
     // Only peers who have explicitly joined voice are valid UDP audio endpoints.
     // Sending packets to users not listening on AUDIO_PORT can trigger Windows
     // WSAECONNRESET (ICMP Port Unreachable) and cut off receive audio.
@@ -132,6 +133,32 @@ fn refresh(
     let _ = events.send(MeshEvent::Peers(list));
 }
 
+/// Text from the network is untrusted: control characters (escape codes, carriage
+/// returns, tabs) are removed so they cannot disturb the layout.
+pub fn clean_chat_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control() || *c == '\n')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Names must be short, non-empty and free of control characters.
+pub fn is_valid_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 24 && !name.chars().any(char::is_control)
+}
+
+/// A friendly reason why a UDP port could not be opened. The usual cause is a second
+/// copy of the app that is already running.
+fn port_error(port: u16, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::AddrInUse {
+        trf("Port {port} is already in use. Is another copy of Friends Voice running?", &[("port", &port)])
+    } else {
+        trf("Could not open UDP port {port}: {error}", &[("port", &port), ("error", error)])
+    }
+}
+
 impl Mesh {
     pub fn start(name: String, saved: Vec<SocketAddr>) -> Result<Self, String> {
         Self::start_on(name, saved, CONTROL_PORT, true)
@@ -140,7 +167,7 @@ impl Mesh {
     /// Custom ports make it possible to test multiple independent nodes on one PC.
     pub fn start_on(name: String, saved: Vec<SocketAddr>, port: u16, broadcast: bool) -> Result<Self, String> {
         let socket = UdpSocket::bind(("0.0.0.0", port))
-            .map_err(|e| format!("Не вдалося відкрити UDP-порт {port}: {e}"))?;
+            .map_err(|e| port_error(port, &e))?;
         socket.set_broadcast(true).map_err(|e| e.to_string())?;
         socket.set_read_timeout(Some(POLL_TIME)).map_err(|e| e.to_string())?;
         let (ips, mut broadcast_targets) = radmin_interfaces();
@@ -175,11 +202,11 @@ impl Mesh {
                             if is_valid_address(address) && address.port() != 0 {
                                 seeds.insert(address);
                                 send(&socket, &MeshPacket::Hello { id, name: nickname.clone(), voice: in_voice, protocol: PROTOCOL_VERSION }, address);
-                                let _ = event_tx.send(MeshEvent::Notice(format!("Запрошення надіслано: {}", address.ip())));
+                                let _ = event_tx.send(MeshEvent::Notice(trf("Invitation sent to {address}", &[("address", &address.ip())])));
                             }
                         }
                         Command::Chat(text) => {
-                            let text = text.trim().to_string();
+                            let text = clean_chat_text(&text);
                             if text.is_empty() || text.chars().count() > 1000 { continue; }
                             let packet = MeshPacket::Chat { id, seq: next_seq, name: nickname.clone(), text: text.clone() };
                             if let Some(bytes) = serialize(&packet) {
@@ -214,7 +241,7 @@ impl Mesh {
                         let Ok(packet) = serde_json::from_slice::<MeshPacket>(&buf[..n]) else { continue; };
                         match packet {
                             MeshPacket::Hello { id: remote_id, name, voice, protocol } => {
-                                if remote_id == id || name.trim().is_empty() || name.chars().count() > 24 {
+                                if remote_id == id || !is_valid_name(&name) {
                                     continue;
                                 }
                                 let now = Instant::now();
@@ -236,8 +263,8 @@ impl Mesh {
                                         protocol: PROTOCOL_VERSION,
                                     }, source);
                                     let _ = event_tx.send(MeshEvent::Notice(if protocol != PROTOCOL_VERSION {
-                                        format!("{name} має несумісну версію Friends Voice — оновіть усі комп'ютери до 0.8.")
-                                    } else { format!("{name} у мережі") }));
+                                        trf("{name} uses an incompatible version of Friends Voice. Everyone should use the same version.", &[("name", &name)])
+                                    } else { trf("{name} is online", &[("name", &name)]) }));
                                 }
                                 // Send known addresses so peers can form a full mesh independently.
                                 if new {
@@ -261,13 +288,15 @@ impl Mesh {
                             MeshPacket::Goodbye { id: remote_id } => {
                                 if peers.get(&source).is_some_and(|p| p.view.id == remote_id) {
                                     if let Some(old) = peers.remove(&source) {
-                                        let _ = event_tx.send(MeshEvent::Notice(format!("{} вийшов(-ла)", old.view.name)));
+                                        let _ = event_tx.send(MeshEvent::Notice(trf("{name} left", &[("name", &old.view.name)])));
                                     }
                                     refresh(&peers, &event_tx, &targets_thread);
                                 }
                             }
                             MeshPacket::Chat { id: remote_id, seq, name: _, text } => {
                                 if text.chars().count() > 1000 { continue; }
+                                let text = clean_chat_text(&text);
+                                if text.is_empty() { continue; }
                                 let Some(peer) = peers.get_mut(&source) else { continue; };
                                 if peer.view.id != remote_id { continue; }
                                 peer.last_seen = Instant::now();
@@ -333,6 +362,20 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_text_is_cleaned_of_control_characters() {
+        assert_eq!(clean_chat_text("  hi\u{1b}[31m there\r\n"), "hi[31m there");
+        assert_eq!(clean_chat_text("a\tb"), "a b");
+        assert_eq!(clean_chat_text("line1\nline2"), "line1\nline2");
+        assert_eq!(clean_chat_text("\u{7}\u{8}"), "");
+        assert!(is_valid_name("Олена"));
+        assert!(!is_valid_name(""));
+        assert!(!is_valid_name("   "));
+        assert!(!is_valid_name("bad\nname"));
+        assert!(!is_valid_name(&"x".repeat(25)));
+        assert!(is_valid_name(&"x".repeat(24)));
+    }
 
     #[test]
     fn audio_targets_include_only_peers_in_voice() {
