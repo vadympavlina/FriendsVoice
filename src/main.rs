@@ -3,6 +3,8 @@ mod mesh;
 mod protocol;
 mod voice;
 mod video;
+mod diagnostics;
+mod i18n;
 mod stream;
 mod screen;
 mod sounds;
@@ -22,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 use voice::VoiceSession;
+use i18n::{decimal, tr, trf, Lang};
 use screen::{ScreenShare, ShareQuality, ShareSource};
 use sounds::{Sound, SoundPlayer};
 use stream::StreamKind;
@@ -49,12 +52,19 @@ struct Settings {
     share_fps: u32,
     sounds_enabled: bool,
     sounds_volume: f32,
+    /// Interface language code: "en" (default), "uk" or "ru".
+    language: String,
+    /// Interface scale factor (1.0 = 100%).
+    ui_scale: f32,
+    window_width: f32,
+    window_height: f32,
+    window_maximized: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            nickname: "Друг".into(),
+            nickname: "Friend".into(),
             known_ips: vec![],
             input_device: String::new(),
             output_device: String::new(),
@@ -69,6 +79,11 @@ impl Default for Settings {
             share_fps: 30,
             sounds_enabled: true,
             sounds_volume: 0.6,
+            language: "en".into(),
+            ui_scale: 1.0,
+            window_width: 0.0,
+            window_height: 0.0,
+            window_maximized: false,
         }
     }
 }
@@ -81,21 +96,6 @@ fn mirror_horizontally(pixels: &mut [u8], width: usize, bytes_per_pixel: usize) 
             let (left, right) = (x * bytes_per_pixel, (width - 1 - x) * bytes_per_pixel);
             for c in 0..bytes_per_pixel { row.swap(left + c, right + c); }
         }
-    }
-}
-
-#[cfg(test)]
-mod mirror_tests {
-    use super::mirror_horizontally;
-    #[test]
-    fn mirror_swaps_pixels_in_each_row_only() {
-        // Two rows of three pixels: [A B C] [D E F]
-        let mut data: Vec<u8> = (0..18).collect();
-        mirror_horizontally(&mut data, 3, 3);
-        assert_eq!(&data[..9], &[6, 7, 8, 3, 4, 5, 0, 1, 2]);
-        assert_eq!(&data[9..], &[15, 16, 17, 12, 13, 14, 9, 10, 11]);
-        mirror_horizontally(&mut data, 3, 3);
-        assert_eq!(data, (0..18).collect::<Vec<u8>>());
     }
 }
 
@@ -120,11 +120,9 @@ fn save_settings(settings: &Settings) {
         // A crash during write should not destroy the user's last known settings.
         // A same-directory temporary file allows an atomic rename on Windows.
         let tmp = path.with_extension("json.tmp");
-        if fs::write(&tmp, &json).is_ok() {
-            if fs::rename(&tmp, &path).is_err() {
-                let _ = fs::write(&path, json);
-                let _ = fs::remove_file(&tmp);
-            }
+        if fs::write(&tmp, &json).is_ok() && fs::rename(&tmp, &path).is_err() {
+            let _ = fs::write(&path, json);
+            let _ = fs::remove_file(&tmp);
         }
     }
 }
@@ -228,6 +226,9 @@ pub struct FriendsApp {
     fullview_missing_since: Option<Instant>,
     last_pointer_move: Instant,
     sounds: SoundPlayer,
+    window_focused: bool,
+    /// A chat message arrived while the window was in the background.
+    attention_wanted: bool,
     /// States seen on the previous frame, to play a sound exactly when one changes.
     prev_mic: bool,
     prev_deaf: bool,
@@ -243,6 +244,7 @@ pub struct FriendsApp {
 impl Default for FriendsApp {
     fn default() -> Self {
         let settings = load_settings();
+        i18n::set_language(Lang::from_code(&settings.language));
         let saved_ptt = settings.push_to_talk;
         let saved_ptt_key = settings.ptt_key;
         let saved_camera_index = settings.camera_index.min(MAX_CAMERA_INDEX);
@@ -273,7 +275,7 @@ impl Default for FriendsApp {
             messages: vec![ChatEntry {
                 time: clock_now(),
                 name: String::new(),
-                text: "Це чат кімнати: його бачать усі, хто зараз у мережі. Повідомлення не зберігаються після закриття програми.".into(),
+                text: i18n::english("This is the room chat: everyone on the network can see it. Messages are not saved when you close the app.").into(),
                 system: true,
                 repeat: 1,
             }],
@@ -310,7 +312,7 @@ impl Default for FriendsApp {
             share_tab: 0,
             share_selected: None,
             share_quality: ShareQuality {
-                max_height: if screen::RESOLUTIONS.iter().any(|(h, _)| *h == saved_share_height) { saved_share_height } else { 1080 },
+                max_height: if screen::RESOLUTIONS.contains(&saved_share_height) { saved_share_height } else { 1080 },
                 fps: if screen::FRAME_RATES.contains(&saved_share_fps) { saved_share_fps } else { 30 },
             },
             share_rate: (Instant::now(), 0, 0.0),
@@ -320,6 +322,8 @@ impl Default for FriendsApp {
             fullview_pan: egui::Vec2::ZERO,
             fullview_missing_since: None,
             last_pointer_move: Instant::now(),
+            window_focused: true,
+            attention_wanted: false,
             sounds: SoundPlayer::new(&saved_output_device, saved_sounds_enabled, saved_sounds_volume),
             prev_mic: true,
             prev_deaf: false,
@@ -383,6 +387,12 @@ impl FriendsApp {
                 MeshEvent::Notice(text) => self.notice(text),
                 MeshEvent::Chat { name, text } => {
                     if self.focus_mode || self.fullview.is_some() {self.chat_unread=self.chat_unread.saturating_add(1);}
+                    // Somebody else wrote while the chat is out of sight: tell the user.
+                    let chat_hidden = self.focus_mode || self.fullview.is_some() || !self.window_focused;
+                    if name != self.settings.nickname && chat_hidden && !self.deafened.load(Ordering::Relaxed) {
+                        self.sounds.play(Sound::Message);
+                        if !self.window_focused { self.attention_wanted = true; }
+                    }
                     self.messages.push(ChatEntry { time: clock_now(), name, text, system: false, repeat: 1 });
                     if self.messages.len() > 600 { self.messages.remove(0); }
                 }
@@ -401,13 +411,13 @@ impl FriendsApp {
                 }
                 self.friend_ip.clear();
                 self.friend_ip_error = None;
-                self.notice(format!("Шукаю друга за адресою {text}. Він з'явиться в списку, щойно відповість."));
+                self.notice(trf("Looking for a friend at {address}. They will appear in the list as soon as they answer.", &[("address", &text)]));
             }
             None => {
                 self.friend_ip_error = Some(if text.is_empty() {
-                    "Введи адресу друга, наприклад 26.12.34.56".to_string()
+                    tr("Enter your friend's address, for example 26.12.34.56").to_string()
                 } else {
-                    format!("«{text}» не схоже на адресу Radmin VPN. Вона має вигляд 26.12.34.56")
+                    trf("“{text}” does not look like a Radmin VPN address. It looks like 26.12.34.56", &[("text", &text)])
                 });
             }
         }
@@ -419,7 +429,7 @@ impl FriendsApp {
             Ok(mesh) => {
                 self.mesh = Some(mesh);
                 self.network_error = None;
-                self.notice("P2P-мережу запущено.");
+                self.notice(tr("Network started."));
             }
             Err(error) => self.network_error = Some(error),
         }
@@ -429,7 +439,7 @@ impl FriendsApp {
         let text = self.draft.trim().to_string();
         if text.is_empty() { return; }
         if text.chars().count() > 1000 {
-            self.notice("Повідомлення не може бути довшим за 1000 символів.");
+            self.notice(tr("A message cannot be longer than 1000 characters."));
             return;
         }
         if let Some(mesh) = &self.mesh {
@@ -449,7 +459,7 @@ impl FriendsApp {
             self.voice.take();
             self.voice_started_at = None;
             if let Some(mesh) = &self.mesh { mesh.voice(false); }
-            self.notice("Ти вийшов(-ла) з голосового каналу.");
+            self.notice(tr("You left the voice channel."));
             return;
         }
         let Some(mesh) = &self.mesh else { return; };
@@ -483,12 +493,12 @@ impl FriendsApp {
                         if camera_was_on { video.enable(); }
                         self.video = Some(video);
                     }
-                    Err(error) => self.notice(format!("Відео недоступне: {error}. Голос працює.")),
+                    Err(error) => self.notice(trf("Video is unavailable: {error}. Voice still works.", &[("error", &error)])),
                 }
-                self.notice("Голос підключено напряму до друзів. Камеру можна вмикати окремо.");
+                self.notice(tr("Voice is connected directly to your friends. You can turn the camera on separately."));
             }
             Err(error) => {
-                self.notice(format!("Не вдалося увійти в голос: {error}. Перевір мікрофон і навушники в налаштуваннях звуку."));
+                self.notice(trf("Could not join voice: {error}. Check your microphone and headphones in the sound settings.", &[("error", &error)]));
                 self.settings_open = true;
                 self.settings_page = 1;
             }
@@ -500,7 +510,7 @@ impl FriendsApp {
     fn ensure_video(&mut self) -> bool {
         if self.video.is_some() { return true; }
         let Some(mesh) = &self.mesh else {
-            self.notice("Немає з'єднання з мережею, камера недоступна.");
+            self.notice(tr("No network connection, the camera is unavailable."));
             return false;
         };
         let targets = if self.voice.is_some() {
@@ -513,7 +523,7 @@ impl FriendsApp {
             Arc::clone(&self.camera_index), Arc::clone(&self.video_quality)) {
             Ok(video) => { self.video = Some(video); true }
             Err(error) => {
-                self.notice(format!("Відео недоступне: {error}"));
+                self.notice(trf("Video is unavailable: {error}", &[("error", &error)]));
                 false
             }
         }
@@ -530,18 +540,18 @@ impl FriendsApp {
                 self.video_textures.remove(&(id, StreamKind::Camera));
                 self.video_seen.remove(&(id, StreamKind::Camera));
             }
-            self.notice("Камеру вимкнено.");
+            self.notice(tr("Camera turned off."));
         } else {
             video.enable();
-            self.notice(if in_call { "Запуск камери. Windows може попросити дозвіл." }
-                else { "Запуск камери для перегляду. Друзі її не бачать." });
+            self.notice(if in_call { tr("Starting the camera. Windows may ask for permission.") }
+                else { tr("Starting the camera for preview. Your friends cannot see it.") });
         }
     }
 
     /// Opens the "what do you want to show" window with a fresh list of screens and windows.
     fn open_share_picker(&mut self) {
         if self.voice.is_none() {
-            self.notice("Щоб показати екран, спершу зайди в голосовий канал.");
+            self.notice(tr("To share your screen, join the voice channel first."));
             return;
         }
         self.share_sources = screen::list_sources();
@@ -563,7 +573,7 @@ impl FriendsApp {
                 self.screen = Some(share);
                 self.share_picker_open = false;
                 self.share_rate = (Instant::now(), 0, 0.0);
-                self.notice(format!("Ти показуєш друзям: {}.", source.title));
+                self.notice(trf("You are sharing: {title}.", &[("title", &source.title)]));
             }
             Err(error) => self.notice(error),
         }
@@ -575,14 +585,14 @@ impl FriendsApp {
             self.video_textures.remove(&(mesh.id, StreamKind::Screen));
             self.video_seen.remove(&(mesh.id, StreamKind::Screen));
         }
-        self.notice(reason.unwrap_or_else(|| "Показ екрана зупинено.".into()));
+        self.notice(reason.unwrap_or_else(|| tr("Screen sharing stopped.").into()));
     }
 
     /// Notices a share that ended by itself and refreshes the bit-rate readout.
     fn watch_screen_share(&mut self) {
         let Some(share) = self.screen.as_ref() else { return; };
         if !share.is_running() {
-            let reason = share.end_reason().unwrap_or_else(|| "Показ екрана зупинено.".into());
+            let reason = share.end_reason().unwrap_or_else(|| tr("Screen sharing stopped.").into());
             self.stop_screen_share(Some(reason));
             return;
         }
@@ -637,6 +647,39 @@ impl FriendsApp {
         }
     }
 
+    /// Switches the interface language immediately and remembers it.
+    fn set_language(&mut self, lang: Lang) {
+        if i18n::language() == lang { return; }
+        i18n::set_language(lang);
+        self.settings.language = lang.code().to_string();
+        // The default name follows the language; a name the user chose is never touched.
+        if ["Friend", "Друг"].contains(&self.settings.nickname.as_str()) {
+            let name = tr("Friend").to_string();
+            self.settings.nickname = name.clone();
+            self.nickname_draft = name.clone();
+            if let Some(mesh) = &self.mesh { mesh.rename(name); }
+        }
+        save_settings(&self.settings);
+    }
+
+    /// Remembers the window size (restored on the next start) and applies the interface scale.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        let scale = self.settings.ui_scale.clamp(0.8, 2.0);
+        if (ctx.zoom_factor() - scale).abs() > 0.001 { ctx.set_zoom_factor(scale); }
+        let (rect, maximized, fullscreen, focused) = ctx.input(|i| {
+            let viewport = i.viewport();
+            (viewport.inner_rect, viewport.maximized.unwrap_or(false),
+             viewport.fullscreen.unwrap_or(false), viewport.focused.unwrap_or(true))
+        });
+        self.window_focused = focused;
+        self.settings.window_maximized = maximized;
+        // The size of a maximised or full-screen window is not the size to come back to.
+        if let (Some(rect), false, false) = (rect, maximized, fullscreen) {
+            self.settings.window_width = rect.width() * scale;
+            self.settings.window_height = rect.height() * scale;
+        }
+    }
+
     fn start_ptt_capture(&mut self) {
         self.ptt_capture = Some(voice::pressed_keys().into_iter().collect());
     }
@@ -651,20 +694,20 @@ impl FriendsApp {
         self.ptt_capture = None;
         if vk == 0x1B { return; } // Esc cancels
         if vk == voice::MUTE_VK {
-            self.notice("F9 уже вимикає мікрофон. Обери іншу клавішу.");
+            self.notice(tr("F9 already toggles the microphone. Choose another key."));
             return;
         }
         self.ptt_key.store(vk, Ordering::Relaxed);
         self.settings.ptt_key = vk;
         save_settings(&self.settings);
-        self.notice(format!("Клавіша Push-to-Talk: {}.", voice::vk_name(vk)));
+        self.notice(trf("Push-to-Talk key: {key}.", &[("key", &voice::vk_name(vk))]));
     }
 
     fn warn_if_camera_stalled(&mut self) {
         let stalled = self.video.as_ref().is_some_and(|v| v.stalled());
         if stalled && !self.camera_stall_reported {
             self.camera_stall_reported = true;
-            self.notice("Камера увімкнена, але кадрів немає. Спробуй іншу камеру або перевір дозвіл у Параметрах Windows.");
+            self.notice(tr("The camera is on but no frames arrive. Try another camera or check the permission in Windows settings."));
         } else if !stalled && self.video.as_ref().is_none_or(|v| !v.starting()) {
             self.camera_stall_reported = false;
         }
@@ -765,6 +808,12 @@ impl FriendsApp {
 
 impl eframe::App for FriendsApp {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.track_window(ctx);
+        if self.attention_wanted && !self.window_focused {
+            // Makes the taskbar button flash until the window is focused.
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+        }
+        self.attention_wanted = false;
         self.poll_events();
         self.stop_orphan_preview();
         self.poll_ptt_capture();
@@ -846,11 +895,23 @@ impl eframe::App for FriendsApp {
     }
 }
 
+/// The saved window size if it is sensible, otherwise the default. A window that was
+/// closed on a bigger monitor must not open off-screen or tiny on a smaller one.
+fn restored_window_size(width: f32, height: f32) -> [f32; 2] {
+    const DEFAULT: [f32; 2] = [1400.0, 860.0];
+    let ok = |v: f32, min: f32, max: f32| v.is_finite() && (min..=max).contains(&v);
+    if ok(width, 960.0, 7680.0) && ok(height, 620.0, 4320.0) { [width, height] } else { DEFAULT }
+}
+
 fn main() -> eframe::Result<()> {
+    diagnostics::install();
+    let saved = load_settings();
+    let [width, height] = restored_window_size(saved.window_width, saved.window_height);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 860.0])
+            .with_inner_size([width, height])
             .with_min_inner_size([960.0, 620.0])
+            .with_maximized(saved.window_maximized)
             .with_icon(branding::icon()),
         ..Default::default()
     };
@@ -858,4 +919,41 @@ fn main() -> eframe::Result<()> {
         ui::install_theme(&cc.egui_ctx);
         Ok(Box::new(FriendsApp::default()))
     }))
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+        fn mirror_swaps_pixels_in_each_row_only() {
+            // Two rows of three pixels: [A B C] [D E F]
+            let mut data: Vec<u8> = (0..18).collect();
+            mirror_horizontally(&mut data, 3, 3);
+            assert_eq!(&data[..9], &[6, 7, 8, 3, 4, 5, 0, 1, 2]);
+            assert_eq!(&data[9..], &[15, 16, 17, 12, 13, 14, 9, 10, 11]);
+            mirror_horizontally(&mut data, 3, 3);
+            assert_eq!(data, (0..18).collect::<Vec<u8>>());
+        }
+
+    #[test]
+    fn saved_window_size_is_used_only_when_it_is_sensible() {
+        assert_eq!(restored_window_size(1600.0, 900.0), [1600.0, 900.0]);
+        assert_eq!(restored_window_size(0.0, 0.0), [1400.0, 860.0], "never saved");
+        assert_eq!(restored_window_size(300.0, 200.0), [1400.0, 860.0], "too small");
+        assert_eq!(restored_window_size(50_000.0, 900.0), [1400.0, 860.0], "absurd");
+        assert_eq!(restored_window_size(f32::NAN, 900.0), [1400.0, 860.0]);
+    }
+
+    #[test]
+    fn settings_from_an_older_version_still_load() {
+        // A file written before the window, language and scale options existed.
+        let old = r#"{"nickname":"Олена","volume":1.0,"push_to_talk":true}"#;
+        let settings: Settings = serde_json::from_str(old).expect("old settings must load");
+        assert_eq!(settings.nickname, "Олена");
+        assert!(settings.push_to_talk);
+        assert_eq!(settings.language, "en", "English is the default");
+        assert_eq!(settings.ui_scale, 1.0);
+        assert_eq!(settings.window_width, 0.0);
+    }
 }

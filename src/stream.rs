@@ -6,6 +6,7 @@
 //! Frames are split into small packets with one XOR parity packet, so a single
 //! lost packet per frame is repaired. When more is lost the viewer asks the
 //! sender for a fresh key frame instead of showing a smeared picture.
+use crate::i18n::{trf};
 use crate::protocol::STREAM_PORT;
 use crate::video::{VideoEvent, VideoFrame};
 use fast_image_resize as fr;
@@ -217,17 +218,17 @@ impl StreamEncoder {
             // that does not fit; skipped frames are simply not sent.
             .enable_skip_frame(true);
         let inner = Encoder::with_api_config(OpenH264API::from_source(), config)
-            .map_err(|e| format!("кодувальник H.264: {e}"))?;
+            .map_err(|e| trf("H.264 encoder: {error}", &[("error", &e)]))?;
         // A regular key frame lets late joiners and lossy links recover on their own.
         Ok(Self { inner, frames: 0, key_every: (fps as u64 * 4).max(30) })
     }
 
     pub fn encode(&mut self, picture: &I420, force_key: bool) -> Result<Option<EncodedFrame>, String> {
-        if force_key || self.frames % self.key_every == 0 {
+        if force_key || self.frames.is_multiple_of(self.key_every) {
             self.inner.force_intra_frame();
         }
         self.frames += 1;
-        let stream = self.inner.encode(picture).map_err(|e| format!("кодування H.264: {e}"))?;
+        let stream = self.inner.encode(picture).map_err(|e| trf("H.264 encoding: {error}", &[("error", &e)]))?;
         let key = matches!(stream.frame_type(), FrameType::IDR | FrameType::I);
         if matches!(stream.frame_type(), FrameType::Skip | FrameType::Invalid) { return Ok(None); }
         let data = stream.to_vec();
@@ -241,7 +242,7 @@ pub struct StreamDecoder {
 }
 impl StreamDecoder {
     pub fn new() -> Result<Self, String> {
-        Ok(Self { inner: Decoder::new().map_err(|e| format!("розпакувальник H.264: {e}"))? })
+        Ok(Self { inner: Decoder::new().map_err(|e| trf("H.264 decoder: {error}", &[("error", &e)]))? })
     }
     /// Decodes one access unit into `out` (RGBA) and returns the picture size.
     pub fn decode(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<Option<(usize, usize)>, String> {
@@ -500,7 +501,7 @@ fn bind_socket() -> Result<UdpSocket, String> {
     let _ = socket.set_recv_buffer_size(8 << 20);
     let _ = socket.set_send_buffer_size(4 << 20);
     let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, STREAM_PORT));
-    socket.bind(&address.into()).map_err(|e| format!("не вдалося відкрити UDP-порт {STREAM_PORT}: {e}"))?;
+    socket.bind(&address.into()).map_err(|e| trf("could not open UDP port {port}: {error}", &[("port", &STREAM_PORT), ("error", &e)]))?;
     let socket: UdpSocket = socket.into();
     socket.set_read_timeout(Some(Duration::from_millis(50))).map_err(|e| e.to_string())?;
     Ok(socket)
@@ -548,13 +549,13 @@ impl StreamHub {
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
                     let id = (frame.sender, frame.kind);
-                    if !decoders.contains_key(&id) {
-                        match StreamDecoder::new() {
-                            Ok(decoder) => { decoders.insert(id, decoder); }
+                    let decoder = match decoders.entry(id) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => match StreamDecoder::new() {
+                            Ok(decoder) => entry.insert(decoder),
                             Err(_) => continue,
-                        }
-                    }
-                    let Some(decoder) = decoders.get_mut(&id) else { continue; };
+                        },
+                    };
                     match decoder.decode(&frame.data, &mut rgba) {
                         Ok(Some((width, height))) => {
                             counter.fetch_add(1, Ordering::Relaxed);

@@ -21,22 +21,22 @@ impl FriendsApp {
                 .inner_margin(Margin::same(22.0))
                 .shadow(egui::Shadow { offset: Vec2::new(0.0, 12.0), blur: 32.0, spread: 0.0, color: Color32::from_black_alpha(140) }))
             .show(ctx, |ui| {
-                ui.label(strong("Що показати друзям?", 19.0, TEXT));
+                ui.label(strong(tr("What do you want to show?"), 19.0, TEXT));
                 ui.add_space(2.0);
-                Self::hint(ui, "Друзі в каналі побачать це великим зображенням. Звук комп'ютера поки не передається.");
+                Self::hint(ui, tr("Friends in the channel will see it as a large picture. Computer sound is not shared yet."));
                 ui.add_space(12.0);
 
                 let screens = self.share_sources.iter().filter(|s| !s.is_window()).count();
                 let windows = self.share_sources.iter().filter(|s| s.is_window()).count();
                 ui.horizontal(|ui| {
-                    if let Some(tab) = segmented(ui, &[format!("Екран ({screens})"), format!("Вікно ({windows})")], self.share_tab) {
+                    if let Some(tab) = segmented(ui, &[trf("Screen ({count})", &[("count", &screens)]), trf("Window ({count})", &[("count", &windows)])], self.share_tab) {
                         if tab != self.share_tab {
                             self.share_tab = tab;
                             self.share_selected = self.share_sources.iter().position(|s| s.is_window() == (tab == 1));
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if icon_button(ui, ph::ARROWS_CLOCKWISE, "Оновити список", false, 32.0) { refresh = true; }
+                        if icon_button(ui, ph::ARROWS_CLOCKWISE, tr("Refresh list"), false, 32.0) { refresh = true; }
                     });
                 });
                 ui.add_space(8.0);
@@ -51,10 +51,10 @@ impl FriendsApp {
                             ui.add_space(14.0);
                             ui.vertical_centered(|ui| {
                                 if cfg!(windows) {
-                                    ui.label(strong(if want_windows { "Немає вікон для показу" } else { "Екрани не знайдено" }, 14.0, TEXT));
-                                    ui.label(text("Відкрий потрібну програму й натисни «Оновити список».", 12.5, TEXT3));
+                                    ui.label(strong(if want_windows { tr("No windows to share") } else { tr("No screens found") }, 14.0, TEXT));
+                                    ui.label(text(tr("Open the app you need and press “Refresh list”."), 12.5, TEXT3));
                                 } else {
-                                    ui.label(strong("Показ екрана працює лише у Windows", 14.0, TEXT));
+                                    ui.label(strong(tr("Screen sharing only works on Windows"), 14.0, TEXT));
                                 }
                             });
                             ui.add_space(14.0);
@@ -83,14 +83,14 @@ impl FriendsApp {
                 });
                 ui.add_space(14.0);
 
-                ui.label(strong("Якість", 14.0, TEXT));
+                ui.label(strong(tr("Quality"), 14.0, TEXT));
                 ui.add_space(4.0);
-                ui.label(text("Роздільність", 12.5, TEXT3));
-                let labels: Vec<String> = screen::RESOLUTIONS.iter().map(|(_, l)| l.to_string()).collect();
-                let current = screen::RESOLUTIONS.iter().position(|(h, _)| *h == self.share_quality.max_height).unwrap_or(1);
-                if let Some(i) = segmented(ui, &labels, current) { self.share_quality.max_height = screen::RESOLUTIONS[i].0; }
+                ui.label(text(tr("Resolution"), 12.5, TEXT3));
+                let labels: Vec<String> = screen::RESOLUTIONS.iter().map(|h| screen::resolution_label(*h)).collect();
+                let current = screen::RESOLUTIONS.iter().position(|h| *h == self.share_quality.max_height).unwrap_or(1);
+                if let Some(i) = segmented(ui, &labels, current) { self.share_quality.max_height = screen::RESOLUTIONS[i]; }
                 ui.add_space(6.0);
-                ui.label(text("Кадрів за секунду", 12.5, TEXT3));
+                ui.label(text(tr("Frames per second"), 12.5, TEXT3));
                 let labels: Vec<String> = screen::FRAME_RATES.iter().map(|f| f.to_string()).collect();
                 let current = screen::FRAME_RATES.iter().position(|f| *f == self.share_quality.fps).unwrap_or(1);
                 if let Some(i) = segmented(ui, &labels, current) { self.share_quality.fps = screen::FRAME_RATES[i]; }
@@ -100,17 +100,23 @@ impl FriendsApp {
                     .filter(|(w, h)| *w > 0 && *h > 0).unwrap_or((1920, 1080));
                 let (out_w, out_h) = self.share_quality.output_size(source_size.0, source_size.1);
                 let mbps = self.share_quality.bitrate(out_w, out_h) as f32 / 1_000_000.0;
-                let each = format!("{mbps:.1}").replace('.', ",");
-                let total = if friends > 1 { format!(", разом ≈{} Мбіт/с", format!("{:.1}", mbps * friends as f32).replace('.', ",")) } else { String::new() };
-                Self::hint(ui, format!("Буде надіслано {out_w}×{out_h}, {} к/с: ≈{each} Мбіт/с кожному другові{total}.", self.share_quality.fps));
+                let each = decimal(mbps, 1);
+                Self::hint(ui, if friends > 1 {
+                    trf("You will send {width}×{height}, {fps} fps: ≈{each} Mbit/s to each friend, ≈{total} Mbit/s in total.",
+                        &[("width", &out_w), ("height", &out_h), ("fps", &self.share_quality.fps),
+                          ("each", &each), ("total", &decimal(mbps * friends as f32, 1))])
+                } else {
+                    trf("You will send {width}×{height}, {fps} fps: ≈{each} Mbit/s to each friend.",
+                        &[("width", &out_w), ("height", &out_h), ("fps", &self.share_quality.fps), ("each", &each)])
+                });
                 if self.share_quality.fps == 60 || self.share_quality.max_height >= 1440 {
-                    ui.label(text("Висока якість сильно навантажує процесор і канал. Якщо показ смикається, зменш її.", 12.5, WARN));
+                    ui.label(text(tr("High quality puts a heavy load on the processor and the connection. If sharing stutters, lower it."), 12.5, WARN));
                 }
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if primary_button(ui, "Почати показ", self.share_selected.is_some()) { start = true; }
-                        if quiet_button(ui, "Скасувати") { close = true; }
+                        if primary_button(ui, tr("Start sharing"), self.share_selected.is_some()) { start = true; }
+                        if quiet_button(ui, tr("Cancel")) { close = true; }
                     });
                 });
             });

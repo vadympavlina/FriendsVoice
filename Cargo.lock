@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "friends-voice"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "cpal",
  "eframe",

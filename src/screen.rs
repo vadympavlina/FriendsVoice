@@ -3,6 +3,7 @@
 //! Capture uses the Windows Graphics Capture API (the same one Windows' own
 //! screen recorder uses): it can grab a window even when it is partly covered,
 //! includes the mouse cursor, and is hardware accelerated.
+use crate::i18n::tr;
 use crate::stream::{fit_size, EncodedFrame, I420, Scaler, StreamEncoder, StreamHub, StreamKind};
 use crate::video::{VideoEvent, VideoFrame};
 use std::{
@@ -54,12 +55,11 @@ pub struct ShareQuality {
     pub fps: u32,
 }
 
-pub const RESOLUTIONS: [(usize, &str); 4] = [
-    (720, "720p"),
-    (1080, "1080p"),
-    (1440, "1440p"),
-    (2160, "Оригінал (до 4K)"),
-];
+/// Maximum heights offered in the picker.
+pub const RESOLUTIONS: [usize; 4] = [720, 1080, 1440, 2160];
+pub fn resolution_label(height: usize) -> String {
+    if height >= 2160 { tr("Original (up to 4K)").to_string() } else { format!("{height}p") }
+}
 pub const FRAME_RATES: [u32; 3] = [15, 30, 60];
 
 impl Default for ShareQuality {
@@ -271,7 +271,7 @@ impl ScreenShare {
         _source: &ShareSource, _quality: ShareQuality, _hub: Arc<StreamHub>,
         _events: SyncSender<VideoEvent>, _local_id: u64,
     ) -> Result<Self, String> {
-        Err("Показ екрана працює лише у Windows.".into())
+        Err(tr("Screen sharing only works on Windows.").into())
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -335,6 +335,7 @@ impl Drop for ScreenShare {
 #[cfg(windows)]
 mod windows_impl {
     use super::*;
+    use crate::i18n::trf;
     use std::ffi::c_void;
     use windows_capture::{
         capture::{Context, GraphicsCaptureApiHandler},
@@ -359,11 +360,11 @@ mod windows_impl {
                 let hz = monitor.refresh_rate().unwrap_or(0);
                 let handle = monitor.as_raw_hmonitor() as usize;
                 let mut detail = format!("{width}×{height}");
-                if hz > 0 { detail.push_str(&format!(", {hz} Гц")); }
-                if Some(handle) == primary { detail.push_str(", основний"); }
+                if hz > 0 { detail.push_str(&trf(", {hz} Hz", &[("hz", &hz)])); }
+                if Some(handle) == primary { detail.push_str(tr(", primary")); }
                 sources.push(ShareSource {
                     target: ShareTarget::Monitor { handle },
-                    title: format!("Екран {}", index + 1),
+                    title: trf("Screen {number}", &[("number", &(index + 1))]),
                     detail,
                     size: (width as usize, height as usize),
                 });
@@ -382,7 +383,7 @@ mod windows_impl {
                     size,
                 })
             }).collect();
-            found.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            found.sort_by_key(|source| source.title.to_lowercase());
             sources.extend(found);
         }
         sources
@@ -425,7 +426,7 @@ mod windows_impl {
         }
 
         fn on_closed(&mut self) -> Result<(), Self::Error> {
-            self.mailbox.close("Показ зупинено: вікно або екран закрито.");
+            self.mailbox.close(tr("Sharing stopped: the window or screen was closed."));
             Ok(())
         }
     }
@@ -447,8 +448,7 @@ mod windows_impl {
 
     /// Starts capturing on its own thread and returns a function that stops it.
     pub fn start_capture(target: &ShareTarget, mailbox: Arc<Mailbox>, fps: u32) -> Result<Box<dyn FnOnce() + Send>, String> {
-        let explain = |e: String| format!(
-            "Не вдалося почати показ: {e}. Потрібна Windows 10 версії 1903 або новіша.");
+        let explain = |e: String| trf("Could not start sharing: {error}. Windows 10 version 1903 or newer is required.", &[("error", &e)]);
         match target {
             ShareTarget::Monitor { handle } => {
                 let monitor = Monitor::from_raw_hmonitor(*handle as *mut c_void);
@@ -458,7 +458,7 @@ mod windows_impl {
             }
             ShareTarget::Window { handle } => {
                 let window = Window::from_raw_hwnd(*handle as *mut c_void);
-                if !window.is_valid() { return Err("Це вікно вже закрите або його не можна показувати.".into()); }
+                if !window.is_valid() { return Err(tr("This window is already closed or cannot be shared.").into()); }
                 let control = Handler::start_free_threaded(settings(window, mailbox, fps))
                     .map_err(|e| explain(e.to_string()))?;
                 Ok(Box::new(move || { let _ = control.stop(); }))
@@ -526,7 +526,8 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(ShareStats::default());
         let quality = ShareQuality { max_height: 360, fps: 30 }; // 1280x720 source -> 640x360
-        let sent: Arc<Mutex<Vec<(bool, Vec<u8>)>>> = Arc::new(Mutex::new(Vec::new()));
+        type SentFrames = Arc<Mutex<Vec<(bool, Vec<u8>)>>>;
+        let sent: SentFrames = Arc::new(Mutex::new(Vec::new()));
         let previews = Arc::new(AtomicU64::new(0));
 
         let worker = {

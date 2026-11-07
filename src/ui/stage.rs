@@ -10,7 +10,7 @@ impl FriendsApp {
                 ui.painter().hline(bar.x_range(), bar.bottom(), Stroke::new(1.0_f32, LINE));
                 ui.horizontal_centered(|ui| {
                     ui.label(text(ph::SPEAKER_HIGH, 19.0, TEXT3));
-                    ui.label(strong("Загальний", 15.5, TEXT));
+                    ui.label(strong(tr("General"), 15.5, TEXT));
                     if let Some(start) = self.voice_started_at {
                         ui.add_space(6.0);
                         ui.label(mono(clock(start.elapsed().as_secs()), 13.0, GREEN));
@@ -19,23 +19,22 @@ impl FriendsApp {
                         let talking = self.voice.as_ref()
                             .is_some_and(|v| v.transmitting.load(Ordering::Relaxed));
                         ui.add_space(6.0);
-                        ui.label(text(format!("Тримай {}, щоб говорити",
-                            voice::vk_name(self.ptt_key.load(Ordering::Relaxed))),
+                        ui.label(text(trf("Hold {key} to talk", &[("key", &voice::vk_name(self.ptt_key.load(Ordering::Relaxed)))]),
                             12.5, if talking { GREEN } else { TEXT3 }));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        if icon_button(ui, ph::GEAR, "Налаштування", false, 34.0) {
+                        if icon_button(ui, ph::GEAR, tr("Settings"), false, 34.0) {
                             self.settings_open = true;
                         }
                         if icon_button(ui,
                             if self.focus_mode { ph::CORNERS_IN } else { ph::CORNERS_OUT },
-                            if self.focus_mode { "Повернути чат · Ctrl+E" } else { "Театральний режим · Ctrl+E" },
+                            if self.focus_mode { tr("Show chat · Ctrl+E") } else { tr("Theatre mode · Ctrl+E") },
                             self.focus_mode, 34.0) {
                             self.focus_mode = !self.focus_mode;
                             if !self.focus_mode { self.chat_unread = 0; }
                         }
-                        if icon_button(ui, ph::SIDEBAR_SIMPLE, "Бічна панель · Ctrl+B",
+                        if icon_button(ui, ph::SIDEBAR_SIMPLE, tr("Left panel · Ctrl+B"),
                             self.sidebar_open, 34.0) {
                             self.sidebar_open = !self.sidebar_open;
                         }
@@ -87,43 +86,57 @@ impl FriendsApp {
             |ui| {
                 brand_mark(ui, 88.0);
                 ui.add_space(10.0);
-                ui.label(strong("Загальний голосовий канал", 22.0, TEXT));
+                ui.label(strong(tr("General voice channel"), 22.0, TEXT));
                 ui.add_space(2.0);
                 ui.label(text(
-                    if in_channel.is_empty() { "У каналі поки нікого".to_string() }
-                    else { format!("У каналі: {}", in_channel.join(", ")) },
+                    if in_channel.is_empty() { tr("Nobody is in the channel yet").to_string() }
+                    else { trf("In the channel: {names}", &[("names", &in_channel.join(", "))]) },
                     14.0, TEXT2));
                 ui.add_space(16.0);
-                if pill_button(ui, "Приєднатися до голосу", ACCENT, ACCENT_INK, Vec2::new(250.0, 48.0), self.mesh.is_some()) {
+                if pill_button(ui, tr("Join voice"), ACCENT, ACCENT_INK, Vec2::new(250.0, 48.0), self.mesh.is_some()) {
                     self.toggle_voice();
                 }
                 if self.mesh.is_none() {
                     ui.add_space(6.0);
-                    ui.label(text("Спершу відновіть з'єднання в лівій панелі.", 12.5, RED));
+                    ui.label(text(tr("First restore the connection in the left panel."), 12.5, RED));
                 }
+                ui.add_space(14.0);
+                // Shown on the first screen so the language can be found without reading English.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    let total: f32 = Lang::ALL.iter().map(|l| l.native_name().chars().count() as f32 * 7.5 + 14.0).sum();
+                    ui.add_space(((ui.available_width() - total) * 0.5).max(0.0));
+                    for lang in Lang::ALL {
+                        let active = i18n::language() == lang;
+                        let label = text(lang.native_name(), 13.0, if active { TEXT } else { TEXT3 });
+                        let response = ui.add(egui::Label::new(if active { label.underline() } else { label }).sense(Sense::click()));
+                        if response.clicked() { self.set_language(lang); }
+                        if response.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
+                    }
+                });
                 if nobody_online {
                     ui.add_space(26.0);
                     egui::Frame::none().fill(CHAT).rounding(Rounding::same(12.0)).inner_margin(Margin::same(16.0)).show(ui, |ui| {
                         ui.set_width(width - 32.0);
-                        ui.label(strong("Як позвати друзів", 14.0, TEXT));
+                        ui.label(strong(tr("How to invite friends"), 14.0, TEXT));
                         ui.add_space(4.0);
                         for step in [
-                            "1. Усі встановлюють Radmin VPN і заходять в одну мережу.",
-                            "2. Друзі знайдуться самі. Якщо ні, обміняйтеся адресами Radmin.",
-                            "3. Натисни «Приєднатися до голосу».",
+                            tr("1. Everyone installs Radmin VPN and joins the same network."),
+                            tr("2. Friends find each other automatically. If not, exchange Radmin addresses."),
+                            tr("3. Press “Join voice”."),
                         ] {
                             ui.add(egui::Label::new(text(step, 13.0, TEXT2)).wrap());
                         }
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             if let Some(ip) = ip {
-                                if quiet_button(ui, "Скопіювати мою адресу") {
+                                if quiet_button(ui, tr("Copy my address")) {
                                     ui.output_mut(|o| o.copied_text = ip.to_string());
                                     self.ip_copied_at = Some(Instant::now());
-                                    self.notice(format!("Адресу {ip} скопійовано. Надішли її другові."));
+                                    self.notice(trf("Address {ip} copied. Send it to your friend.", &[("ip", &ip)]));
                                 }
                             }
-                            if quiet_button(ui, "Додати друга за адресою") {
+                            if quiet_button(ui, tr("Add a friend by address")) {
                                 self.sidebar_open = true;
                                 self.add_friend_open = true;
                             }
@@ -142,7 +155,7 @@ impl FriendsApp {
         let mut tiles = vec![Tile {
             key: (local_id, StreamKind::Camera),
             name: self.settings.nickname.clone(),
-            note: Some("ти".into()),
+            note: Some(tr("you").into()),
             speaking: self.voice.as_ref().is_some_and(|v| v.transmitting.load(Ordering::Relaxed)),
             badge: if !in_voice { None }
                 else if self.deafened.load(Ordering::Relaxed) { Some(ph::SPEAKER_SLASH) }
@@ -155,7 +168,7 @@ impl FriendsApp {
             tiles.push(Tile {
                 key: (peer.id, StreamKind::Camera),
                 name: peer.name.clone(),
-                note: (peer.protocol != PROTOCOL_VERSION).then(|| "потрібне оновлення".to_string()),
+                note: (peer.protocol != PROTOCOL_VERSION).then(|| tr("update required").to_string()),
                 speaking: self.voice.as_ref().is_some_and(|v| v.is_speaking(peer.id)),
                 badge: None,
                 contain: false,
@@ -166,10 +179,10 @@ impl FriendsApp {
         screens.sort_unstable();
         for id in screens {
             let (name, note) = if id == local_id {
-                (self.settings.nickname.clone(), "твій показ екрана".to_string())
+                (self.settings.nickname.clone(), tr("your screen share").to_string())
             } else {
                 (self.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default(),
-                 "показує екран".to_string())
+                 tr("is sharing a screen").to_string())
             };
             tiles.push(Tile { key: (id, StreamKind::Screen), name, note: Some(note), speaking: false, badge: None, contain: true });
         }
@@ -232,12 +245,12 @@ impl FriendsApp {
                     Some(TileAction::Fullscreen) => expand = Some((tile.key, true)),
                     None => {}
                 }
-                if tiles.len() > 1 { response.on_hover_text("Клікни, щоб збільшити"); }
+                if tiles.len() > 1 { response.on_hover_text(tr("Click to enlarge")); }
             }
             if alone {
                 let center = Pos2::new(area.center().x, top + total_h + 26.0);
                 ui.painter().text(center, Align2::CENTER_CENTER,
-                    "Тут поки тільки ти. Додай друга за IP у лівій панелі.",
+                    tr("Only you are here so far. Add a friend by address in the left panel."),
                     FontId::proportional(13.5), TEXT3);
             }
         }
@@ -295,7 +308,7 @@ impl FriendsApp {
                 ctx.set_cursor_icon(if surface.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
             }
         } else {
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Трансляція завершилась",
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr("The stream has ended"),
                 FontId::proportional(18.0), TEXT2);
         }
         if surface.double_clicked() { self.close_fullview(&ctx); return; }
@@ -324,26 +337,26 @@ impl FriendsApp {
         let who = if key.0 == local_id { self.settings.nickname.clone() }
             else { self.peers.iter().find(|p| p.id == key.0).map(|p| p.name.clone()).unwrap_or_default() };
         let what = match (key.1, key.0 == local_id) {
-            (StreamKind::Screen, true) => "твій показ екрана",
-            (StreamKind::Screen, false) => "показує екран",
-            (StreamKind::Camera, true) => "твоя камера",
-            (StreamKind::Camera, false) => "камера",
+            (StreamKind::Screen, true) => tr("your screen share"),
+            (StreamKind::Screen, false) => tr("is sharing a screen"),
+            (StreamKind::Camera, true) => tr("your camera"),
+            (StreamKind::Camera, false) => tr("camera"),
         };
         let size_text = texture.as_ref().map(|t| format!("{}×{}", t.size()[0], t.size()[1])).unwrap_or_default();
         let zoom_text = if self.fullview_zoom > 1.01 { format!("  ·  {:.0}%", self.fullview_zoom * 100.0) } else { String::new() };
         ui.painter().text(Pos2::new(rect.left() + 20.0, rect.top() + 22.0), Align2::LEFT_CENTER,
             format!("{who}  ·  {what}"), semibold(17.0), Color32::from_white_alpha((255.0 * controls) as u8));
         ui.painter().text(Pos2::new(rect.left() + 20.0, rect.top() + 44.0), Align2::LEFT_CENTER,
-            format!("{size_text}{zoom_text}  ·  колесо миші: збільшити, 0: скинути"), FontId::proportional(12.0),
+            trf("{info}  ·  mouse wheel: zoom, 0: reset", &[("info", &format!("{size_text}{zoom_text}"))]), FontId::proportional(12.0),
             Color32::from_white_alpha((170.0 * controls) as u8));
         let mut leave_view = false;
         let mut toggle_fullscreen = false;
         let buttons = Rect::from_min_size(Pos2::new(rect.right() - 108.0, rect.top() + 14.0), Vec2::new(96.0, 38.0));
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if icon_button(ui, ph::ARROWS_IN, "Повернутися до звичайного вигляду · Esc", false, 38.0) { leave_view = true; }
+            if icon_button(ui, ph::ARROWS_IN, tr("Back to the normal view · Esc"), false, 38.0) { leave_view = true; }
             if icon_button(ui, if fullscreen { ph::CORNERS_IN } else { ph::CORNERS_OUT },
-                if fullscreen { "Вийти з повного екрана · Esc" } else { "На весь екран · F11" }, fullscreen, 38.0) {
+                if fullscreen { tr("Leave full screen · Esc") } else { tr("Full screen · F11") }, fullscreen, 38.0) {
                 toggle_fullscreen = true;
             }
         });
@@ -373,19 +386,19 @@ impl FriendsApp {
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(text(ph::MONITOR_ARROW_UP, 20.0, ACCENT));
-                    let name = truncated(ui, &format!("Ти показуєш: {title}"), semibold(14.0), TEXT, (ui.available_width() * 0.42).max(120.0));
+                    let name = truncated(ui, &trf("You are sharing: {title}", &[("title", &title)]), semibold(14.0), TEXT, (ui.available_width() * 0.42).max(120.0));
                     ui.label(egui::WidgetText::Galley(name));
-                    let detail = if width == 0 { "запуск…".to_string() } else {
-                        format!("{width}×{height} · {fps} к/с · {} Мбіт/с", format!("{mbps:.1}").replace('.', ","))
+                    let detail = if width == 0 { tr("starting…").to_string() } else {
+                        trf("{width}×{height} · {fps} fps · {mbps} Mbit/s", &[("width", &width), ("height", &height), ("fps", &fps), ("mbps", &decimal(mbps, 1))])
                     };
                     ui.label(text(detail, 12.5, TEXT2));
-                    if viewers == 0 { ui.label(text("У каналі поки ніхто не бачить показ", 12.5, TEXT3)); }
-                    else { ui.label(text(format!("дивляться: {viewers}"), 12.5, TEXT2)); }
+                    if viewers == 0 { ui.label(text(tr("Nobody in the channel sees the share yet"), 12.5, TEXT3)); }
+                    else { ui.label(text(trf("watching: {count}", &[("count", &viewers)]), 12.5, TEXT2)); }
                     if overloaded {
-                        ui.label(text(format!("{} Комп'ютер не встигає: зменш якість або частоту кадрів", ph::WARNING), 12.5, WARN));
+                        ui.label(text(format!("{} {}", ph::WARNING, tr("Your computer cannot keep up: lower the quality or frame rate")), 12.5, WARN));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if pill_button(ui, "Зупинити показ", RED, Color32::WHITE, Vec2::new(0.0, 30.0), true) { stop = true; }
+                        if pill_button(ui, tr("Stop sharing"), RED, Color32::WHITE, Vec2::new(0.0, 30.0), true) { stop = true; }
                     });
                 });
             });
@@ -415,18 +428,18 @@ impl FriendsApp {
             ui.add_space(((ui.available_width() - width) * 0.5).max(0.0));
             if voice {
                 if round_button(ui, if mic { ph::MICROPHONE } else { ph::MICROPHONE_SLASH },
-                    if mic { "Вимкнути мікрофон · Ctrl+M" } else { "Увімкнути мікрофон · Ctrl+M" },
+                    if mic { tr("Turn microphone off · Ctrl+M") } else { tr("Turn microphone on · Ctrl+M") },
                     if mic { RAISED } else { RED }, TEXT, true, d) {
                     self.mic_enabled.store(!mic, Ordering::Relaxed);
                 }
                 if round_button(ui, ph::HEADPHONES,
-                    if deaf { "Увімкнути звук" } else { "Вимкнути звук" },
+                    if deaf { tr("Turn sound on") } else { tr("Turn sound off") },
                     if deaf { RED } else { RAISED }, TEXT, true, d) {
                     self.deafened.store(!deaf, Ordering::Relaxed);
                 }
                 if round_button(ui, if camera { ph::VIDEO_CAMERA } else { ph::VIDEO_CAMERA_SLASH },
-                    if camera_starting { "Камера запускається. Натисни, щоб скасувати." }
-                        else if camera { "Вимкнути камеру" } else { "Увімкнути камеру" },
+                    if camera_starting { tr("The camera is starting. Press to cancel.") }
+                        else if camera { tr("Turn camera off") } else { tr("Turn camera on") },
                     if camera_starting { ACCENT } else if camera { TEXT } else { RAISED },
                     if camera_starting { ACCENT_INK } else if camera { STAGE } else { TEXT },
                     self.mesh.is_some(), d) {
@@ -434,22 +447,22 @@ impl FriendsApp {
                 }
                 let sharing = self.screen.is_some();
                 if round_button(ui, ph::MONITOR_ARROW_UP,
-                    if sharing { "Зупинити показ екрана" } else { "Показати екран або вікно" },
+                    if sharing { tr("Stop screen sharing") } else { tr("Share a screen or window") },
                     if sharing { ACCENT } else { RAISED }, if sharing { ACCENT_INK } else { TEXT }, true, d) {
                     if sharing { self.stop_screen_share(None); } else { self.open_share_picker(); }
                 }
                 ui.add_space(6.0);
-                if pill_button(ui, if leave_width > 120.0 { "Вийти з каналу" } else { "Вийти" }, RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
+                if pill_button(ui, if leave_width > 120.0 { tr("Leave channel") } else { tr("Leave") }, RED, Color32::WHITE, Vec2::new(leave_width, d), true) {
                     self.toggle_voice();
                 }
-            } else if pill_button(ui, "Приєднатися до голосу", ACCENT, ACCENT_INK,
+            } else if pill_button(ui, tr("Join voice"), ACCENT, ACCENT_INK,
                 Vec2::new(join_width, d), self.mesh.is_some()) {
                 self.toggle_voice();
             }
             if chat_button {
                 let unread = self.chat_unread;
                 if round_button(ui, ph::CHAT_CIRCLE_TEXT,
-                    if unread > 0 { "Відкрити чат · є нові повідомлення" } else { "Відкрити чат" },
+                    if unread > 0 { tr("Open chat · new messages") } else { tr("Open chat") },
                     if unread > 0 { ACCENT } else { RAISED },
                     if unread > 0 { ACCENT_INK } else { TEXT }, true, d) {
                     self.focus_mode = false;

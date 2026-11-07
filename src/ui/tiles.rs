@@ -120,8 +120,8 @@ pub(super) fn paint_tile(ui: &mut Ui, rect: Rect, view: &TileView<'_>, video: Op
         let first = Rect::from_min_size(Pos2::new(rect.right() - side * 2.0 - 14.0, rect.top() + 8.0), Vec2::splat(side));
         let second = first.translate(Vec2::new(side + 4.0, 0.0));
         for (area, glyph, tip, wanted) in [
-            (first, ph::ARROWS_OUT, "Розгорнути на все вікно · двічі клікни", TileAction::Expand),
-            (second, ph::CORNERS_OUT, "На весь екран · F11", TileAction::Fullscreen),
+            (first, ph::ARROWS_OUT, tr("Fill the window · double-click"), TileAction::Expand),
+            (second, ph::CORNERS_OUT, tr("Full screen · F11"), TileAction::Fullscreen),
         ] {
             let button = ui.interact(area, egui::Id::new(("tile-action", view.salt.0, view.salt.1.index(), wanted as u8)), Sense::click());
             let fill = if button.hovered() { Color32::from_black_alpha(215) } else { Color32::from_black_alpha(150) };

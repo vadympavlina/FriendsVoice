@@ -26,9 +26,9 @@ impl FriendsApp {
                     let in_voice = self.voice.is_some();
                     let online = self.mesh.is_some();
 
-                    section_label(ui, "Канали", None);
-                    if nav_row(ui, ph::SPEAKER_HIGH, "Загальний", in_voice, online && !in_voice, 0)
-                        .on_hover_text(if in_voice { "Ти в цьому каналі" } else { "Приєднатися до голосу" })
+                    section_label(ui, tr("Channels"), None);
+                    if nav_row(ui, ph::SPEAKER_HIGH, tr("General"), in_voice, online && !in_voice, 0)
+                        .on_hover_text(if in_voice { tr("You are in this channel") } else { tr("Join voice") })
                         .clicked() {
                         self.toggle_voice();
                     }
@@ -45,37 +45,37 @@ impl FriendsApp {
                         let speaking = self.voice.as_ref().is_some_and(|v| v.is_speaking(peer.id));
                         let outdated = peer.protocol != PROTOCOL_VERSION;
                         person_row(ui, 18.0, &peer.name,
-                            outdated.then_some(("Потрібне оновлення", RED)), speaking,
+                            outdated.then_some((tr("Update required"), RED)), speaking,
                             if self.video_textures.contains_key(&(peer.id, StreamKind::Screen)) { Some(ph::MONITOR_ARROW_UP) }
                                 else if self.video_textures.contains_key(&(peer.id, StreamKind::Camera)) { Some(ph::VIDEO_CAMERA) } else { None });
                     }
-                    if nav_row(ui, ph::HASH, "Чат", !self.focus_mode, true, self.chat_unread).clicked() {
+                    if nav_row(ui, ph::HASH, tr("Chat"), !self.focus_mode, true, self.chat_unread).clicked() {
                         self.focus_mode = false;
                         self.chat_unread = 0;
                     }
 
                     let idle: Vec<_> = self.peers.iter().filter(|p| !p.voice).collect();
                     let idle_count = idle.len() + usize::from(!in_voice);
-                    section_label(ui, "У мережі", Some(format!("{}", idle_count)));
+                    section_label(ui, tr("On the network"), Some(format!("{}", idle_count)));
                     if !in_voice {
                         let nickname = self.settings.nickname.clone();
-                        person_row(ui, 0.0, &format!("{nickname} (ти)"), None, false, None);
+                        person_row(ui, 0.0, &trf("{name} (you)", &[("name", &nickname)]), None, false, None);
                     }
                     for peer in idle {
                         let outdated = peer.protocol != PROTOCOL_VERSION;
                         person_row(ui, 0.0, &peer.name,
-                            outdated.then_some(("Потрібне оновлення", RED)), false, None);
+                            outdated.then_some((tr("Update required"), RED)), false, None);
                     }
                     if self.peers.is_empty() {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.add_space(8.0);
                             ui.add(egui::Label::new(text(
-                                "Поки нікого. Додай друга за його адресою Radmin VPN.", 12.5, TEXT3)).wrap());
+                                tr("Nobody yet. Add a friend by their Radmin VPN address."), 12.5, TEXT3)).wrap());
                         });
                     }
 
-                    section_label(ui, "Мережа", None);
+                    section_label(ui, tr("Network"), None);
                     self.network_block(ui);
                 });
             });
@@ -85,9 +85,9 @@ impl FriendsApp {
         let ip = self.mesh.as_ref().and_then(|m| m.local_radmin_ips.first().copied());
         let connected = self.mesh.is_some();
         // One plain sentence about the connection, then what to do about it.
-        let (color, status) = if !connected { (RED, "Немає з'єднання") }
-            else if ip.is_none() { (WARN, "Radmin VPN не знайдено") }
-            else { (GREEN, "Підключено до Radmin VPN") };
+        let (color, status) = if !connected { (RED, tr("No connection")) }
+            else if ip.is_none() { (WARN, tr("Radmin VPN not found")) }
+            else { (GREEN, tr("Connected to Radmin VPN")) };
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             let (dot, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
@@ -103,20 +103,20 @@ impl FriendsApp {
             }
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                if primary_button(ui, "Спробувати знову", true) { self.retry_network(); }
+                if primary_button(ui, tr("Try again"), true) { self.retry_network(); }
             });
         } else if ip.is_none() {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(text(
-                    "Запусти Radmin VPN і зайди в мережу з друзями. Тоді тут з'явиться твоя адреса.", 12.5, TEXT3)).wrap());
+                    tr("Start Radmin VPN and join your friends' network. Your address will appear here."), 12.5, TEXT3)).wrap());
             });
         }
         if let Some(ip) = ip {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.label(text("Твоя адреса, її треба дати друзям", 12.0, TEXT3));
+                ui.label(text(tr("Your address: give it to your friends"), 12.0, TEXT3));
             });
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
@@ -125,7 +125,7 @@ impl FriendsApp {
                     ui.add_space(4.0);
                     let copied = self.ip_copied_at.is_some_and(|t| t.elapsed().as_secs() < 2);
                     if icon_button(ui, if copied { ph::CHECK } else { ph::COPY },
-                        if copied { "Скопійовано" } else { "Скопіювати свою адресу" }, false, 28.0) {
+                        if copied { tr("Copied") } else { tr("Copy your address") }, false, 28.0) {
                         ui.output_mut(|o| o.copied_text = ip.to_string());
                         self.ip_copied_at = Some(Instant::now());
                     }
@@ -133,7 +133,7 @@ impl FriendsApp {
             });
         }
         ui.add_space(4.0);
-        if nav_row(ui, ph::USER_PLUS, "Додати друга за адресою", self.add_friend_open, true, 0).clicked() {
+        if nav_row(ui, ph::USER_PLUS, tr("Add a friend by address"), self.add_friend_open, true, 0).clicked() {
             self.add_friend_open = !self.add_friend_open;
         }
         if self.add_friend_open {
@@ -142,7 +142,7 @@ impl FriendsApp {
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width() - 8.0);
                     ui.add(egui::Label::new(text(
-                        "Друзі зазвичай знаходяться самі. Якщо ні, введи адресу друга з його Radmin VPN: вона починається з 26. Програма запам'ятає її.",
+                        tr("Friends are usually found automatically. If not, enter the address from your friend's Radmin VPN; it starts with 26. The app remembers it."),
                         12.0, TEXT3)).wrap());
                     ui.add_space(2.0);
                     let entry = ui.add(egui::TextEdit::singleline(&mut self.friend_ip)
@@ -156,7 +156,7 @@ impl FriendsApp {
                         ui.add(egui::Label::new(text(error.clone(), 12.0, RED)).wrap());
                     }
                     ui.add_space(2.0);
-                    if (primary_button(ui, "Знайти друга", self.mesh.is_some()) || submit)
+                    if (primary_button(ui, tr("Find friend"), self.mesh.is_some()) || submit)
                         && self.mesh.is_some() {
                         self.add_friend();
                     }
@@ -166,6 +166,16 @@ impl FriendsApp {
     }
 
     pub(super) fn user_bar(&mut self, ui: &mut Ui) {
+        // A thin line along the top edge shows that your microphone is picking you up.
+        if let Some(voice) = &self.voice {
+            let level = f32::from_bits(voice.microphone_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+            let shown = (level * 7.0).min(1.0);
+            if self.mic_enabled.load(Ordering::Relaxed) && shown > 0.03 {
+                let bar = ui.max_rect();
+                let full = Rect::from_min_max(Pos2::new(bar.left() - 10.0, bar.top() - 2.0), Pos2::new(bar.right() + 10.0, bar.top()));
+                ui.painter().rect_filled(Rect::from_min_size(full.min, Vec2::new(full.width() * shown, 2.0)), Rounding::ZERO, GREEN);
+            }
+        }
         let voice = self.voice.is_some();
         let mic = self.mic_enabled.load(Ordering::Relaxed);
         let deaf = self.deafened.load(Ordering::Relaxed);
@@ -176,17 +186,17 @@ impl FriendsApp {
                 ui.add_space(12.0);
                 let name = truncated(ui, &self.settings.nickname, semibold(13.5), TEXT, 84.0);
                 ui.label(egui::WidgetText::Galley(name));
-                ui.label(text(if voice { "У голосі" } else { "У мережі" }, 11.5, TEXT3));
+                ui.label(text(if voice { tr("In voice") } else { tr("On the network") }, 11.5, TEXT3));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if icon_button(ui, ph::GEAR, "Налаштування", self.settings_open, 32.0) {
+                if icon_button(ui, ph::GEAR, tr("Settings"), self.settings_open, 32.0) {
                     self.settings_open = !self.settings_open;
                 }
                 let tint = |on: bool| if on { RED } else { TEXT2 };
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(32.0),
                     if voice { Sense::click() } else { Sense::hover() });
-                let resp = resp.on_hover_text(if !voice { "Зайди в голосовий канал, щоб керувати звуком" } else if deaf { "Увімкнути звук" } else { "Вимкнути звук" });
+                let resp = resp.on_hover_text(if !voice { tr("Join a voice channel to control sound") } else if deaf { tr("Turn sound on") } else { tr("Turn sound off") });
                 if voice && resp.hovered() {
                     ui.painter().rect_filled(rect, Rounding::same(8.0), HOVER);
                 }
@@ -195,8 +205,8 @@ impl FriendsApp {
                 if voice && resp.clicked() { self.deafened.store(!deaf, Ordering::Relaxed); }
                 let (rect, resp) = ui.allocate_exact_size(Vec2::splat(32.0),
                     if voice { Sense::click() } else { Sense::hover() });
-                let resp = resp.on_hover_text(if !voice { "Зайди в голосовий канал, щоб користуватися мікрофоном" }
-                    else if mic { "Вимкнути мікрофон · Ctrl+M" } else { "Увімкнути мікрофон · Ctrl+M" });
+                let resp = resp.on_hover_text(if !voice { tr("Join a voice channel to use the microphone") }
+                    else if mic { tr("Turn microphone off · Ctrl+M") } else { tr("Turn microphone on · Ctrl+M") });
                 if voice && resp.hovered() {
                     ui.painter().rect_filled(rect, Rounding::same(8.0), HOVER);
                 }

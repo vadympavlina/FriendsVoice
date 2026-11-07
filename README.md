@@ -1,55 +1,59 @@
 # Friends Voice
 
-Голосовий чат для друзів у стилі Discord, але без сервера. Нативна Windows-програма на **Rust + egui**: голос, камера й текстовий чат ідуть напряму між комп'ютерами 2–5 друзів у спільній **приватній мережі Radmin VPN**.
+**English** · [Українська](README.uk.md) · [Русский](README.ru.md)
 
-## Як почати
-1. Усі встановлюють Radmin VPN і заходять в одну довірену мережу.
-2. Завантаж `FriendsVoice-Windows-x64.zip` з [Releases](https://github.com/vadympavlina/FriendsVoice/releases), розпакуй і запусти `friends-voice.exe`.
-3. Друзі знаходять одне одного автоматично. Якщо ні, у лівій панелі натисни «Додати друга за IP» і введи його адресу `26.x.x.x`.
-4. Клікни канал «Загальний» або кнопку «Приєднатися до голосу».
+A Discord-style voice chat for friends, with no server. A native Windows app written in **Rust + egui**: voice, camera, screen sharing and text chat go straight between the computers of 2–5 friends in a shared **private Radmin VPN network**.
 
-Потрібні UDP-порти лише всередині VPN: 45888 (виявлення й чат), 45889 (голос), 45890 (камера JPEG), 45891 (H.264: HD-камера й показ екрана). Не відкривай їх в інтернет.
+## Getting started
+1. Everyone installs Radmin VPN and joins the same trusted network.
+2. Download `FriendsVoice-Windows-x64.zip` from [Releases](https://github.com/vadympavlina/FriendsVoice/releases), unpack it and run `friends-voice.exe`.
+3. Friends find each other automatically. If not, press “Add a friend by address” in the left panel and enter their `26.x.x.x` address.
+4. Click the “General” channel or the “Join voice” button.
 
-## Інтерфейс
-Три зони, як у знайомих голосових клієнтах:
-- **Ліворуч:** канал «Загальний» з учасниками голосу під ним, список друзів у мережі, твоя VPN-адреса з копіюванням, панель користувача (мікрофон, звук, налаштування).
-- **Посередині:** сцена з плитками учасників. Той, хто говорить, підсвічується зеленою рамкою. Знизу керування дзвінком.
-- **Праворуч:** чат із пошуком. Однакові службові повідомлення згортаються в одне («×3»).
+UDP ports are needed only inside the VPN: 45888 (discovery and chat), 45889 (voice), 45890 (JPEG camera), 45891 (H.264: HD camera and screen sharing). Never open them to the internet.
 
-Налаштування відкриваються окремою сторінкою: Звук, Відео, Загальні, Про програму.
+## Languages
+English (default), Українська and Русский. Switch in Settings → Profile or on the start screen; the change is instant.
 
-| Клавіша | Дія |
+## Interface
+- **Left:** the voice channel with its people, friends on the network, your Radmin address (with a copy button), and the user bar (microphone, sound, settings). A thin green line over the user bar shows that your microphone hears you.
+- **Middle:** the stage with a tile per person and the call controls. The speaker gets a green frame.
+- **Right:** chat with search and clickable links. Repeated notices fold into one (“×3”). A quiet sound and a flashing taskbar button tell you about new messages when the window is in the background.
+
+| Key | Action |
 |---|---|
-| Ctrl+M | мікрофон |
-| Ctrl+B | бічна панель |
-| Ctrl+E | театральний режим (без чату, плитки на всю сцену) |
-| Ctrl+F | пошук у чаті |
-| F11 | повний екран монітора |
-| Esc | закрити пошук, налаштування чи театральний режим |
-| F9 | мікрофон з будь-якого вікна |
-| F8 (за замовчуванням) | Push-to-Talk. Клавішу можна змінити на будь-яку: Налаштування → Звук → «Змінити клавішу» (літери, F-клавіші, Num, Shift/Ctrl/Alt, бічні кнопки миші) |
+| Ctrl+M | microphone |
+| F9 | microphone from any window, even in a game |
+| Ctrl+B | left panel |
+| Ctrl+E | theatre mode (no chat, larger tiles) |
+| Ctrl+F | search chat |
+| F11 | full screen |
+| Esc | step back: full screen, expanded view, search, settings |
+| F8 (default) | Push-to-Talk; any key or mouse button can be chosen in Settings → Sound |
 
-## Камера
-- Камери показуються за справжніми назвами; у Налаштуваннях → Відео є **перегляд камери** ще до входу в дзвінок. Поки ти не в голосовому каналі, друзі цей перегляд не отримують, а камера вимикається, щойно ти залишаєш сторінку.
-- Шість рівнів якості: від «Економії» 320×180 до **«Максимум» 1920×1080 на 30 к/с**. Два верхні рівні (720p і 1080p) працюють через відеокодек H.264 (трафік ≈3 і ≈6 Мбіт/с на кожного друга), нижчі лишаються на JPEG.
-- Кадр обрізається до 16:9 по центру (без розтягування), свій перегляд дзеркальний, друзям іде нормальне зображення.
-- Якщо камера не віддає MJPEG, програма пробує YUY2/NV12 та інші формати. У налаштуваннях видно режим камери й лічильники кадрів.
+## Camera
+- Cameras are listed by name. Settings → Video has a **private preview** before you join a call; nothing is sent to friends until you are in the voice channel, and the camera turns off when you leave the page.
+- Six quality levels up to **1920×1080 at 30 fps**. The top two (720p and 1080p) use the H.264 codec (about 3 and 6 Mbit/s per friend); the lower ones use JPEG.
+- The picture is cropped to 16:9 in the centre, never squashed. Your own preview is mirrored; friends see it normally.
 
-## Показ екрана
-Кнопка з монітором у панелі дзвінка: показати **весь екран або окреме вікно** (через Windows Graphics Capture, із курсором). Роздільність 720p / 1080p / 1440p / оригінал до 4K, частота 15 / 30 / 60 к/с, перед стартом видно очікуваний трафік. Зображення друга стає великим, решта учасників у смужці, клік по будь-якій плитці збільшує її. Звук комп'ютера поки не передається.
+## Screen sharing
+The monitor button in the call bar shares **a whole screen or a single window** (Windows Graphics Capture, with the cursor). Resolution 720p / 1080p / 1440p / original up to 4K, 15 / 30 / 60 fps, with a traffic estimate before you start. A friend's screen becomes the big picture with everybody else in a strip; click any tile to enlarge it. Computer sound is not shared yet.
 
-## Розгорнути на все вікно або на весь екран
-Наведи на будь-яку плитку (камера чи показ екрана): з'являться кнопки «на все вікно» і «на весь екран». Те саме: подвійний клік по плитці розгортає її на все вікно, **F11** вмикає повний екран монітора, **Esc** виходить (спершу з повного екрана, потім із розгорнутого вигляду). У розгорнутому вигляді картинка завжди показується цілою, **колесом миші її можна збільшити до 600%** й рухати перетягуванням, щоб розгледіти дрібний текст (клавіша 0 скидає масштаб). Кнопки керування дзвінком внизу сховаються самі, якщо мишу не чіпати; вгорі видно, хто показує, а внизу зліва, хто зараз говорить.
+## Expand to the window or the whole screen
+Hover a tile with a picture: buttons appear for “fill the window” and “full screen”. Double-click also fills the window; **F11** goes full screen and **Esc** steps back. In the expanded view the picture is always whole, the **mouse wheel zooms up to 600%** and dragging moves it (key 0 resets), which is handy for reading small text. Controls hide when the mouse is still, and a label shows who is talking.
 
-## Звуки
-Окремі звуки для мікрофона, звуку, камери, показу екрана, свого входу/виходу й підключення друга (окремий «дзвіночок»). Вони створюються програмою, гучність і вимикач у Налаштуваннях → Звук.
+## Sounds
+Separate sounds for microphone, sound, camera, screen sharing, your own join/leave, and a distinct bell when a friend joins or leaves. They are synthesized by the app; volume and an on/off switch are in Settings → Sound.
 
-## Обмеження
-Власного наскрізного шифрування та перевірки особи друга немає, захист дає лише приватна VPN-мережа. Усунення луни не реалізоване, звук комп'ютера під час показу екрана не передається. Історія чату зберігається лише до закриття програми.
+## Limits
+There is no end-to-end encryption or identity check; the private VPN is the protection. Echo cancellation is not implemented and computer sound is not shared during screen sharing. Chat history is kept only until the app closes.
 
-## Збірка
+## Troubleshooting
+Settings → About → “Copy report” gathers the version, devices and network state for a bug report. Crashes are written to `%APPDATA%\FriendsVoice\crash.log` (“Open logs folder” opens it).
+
+## Building
 ```bash
 cargo test
 cargo build --release
 ```
-Реліз збирає GitHub Actions (`.github/workflows/windows-release.yml`): архів із `friends-voice.exe` з'являється в Releases.
+GitHub Actions (`.github/workflows/windows-release.yml`) builds and tests every pull request and publishes a Windows archive with `friends-voice.exe` to Releases after a merge to `main`.

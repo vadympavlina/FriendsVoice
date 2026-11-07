@@ -1,6 +1,7 @@
 //! Lightweight native Windows webcam video for small, trusted Radmin VPN rooms.
 //! Camera is ON ONLY when explicitly enabled by the user. JPEG uses low resolution
 //! and a strict bandwidth cap; this is a beta transport, not a low-latency H.264 stack.
+use crate::i18n::{tr, trf};
 use crate::protocol::VIDEO_PORT;
 use crate::stream::{fit_size, I420, Scaler, StreamEncoder, StreamHub, StreamKind};
 use image::{codecs::jpeg::JpegEncoder, imageops::FilterType, ExtendedColorType, ImageFormat, RgbImage};
@@ -172,7 +173,10 @@ fn make_fragments(id: u64, session_id: u64, seq: u32, jpg: &[u8]) -> Option<Vec<
     }
     Some(result)
 }
-fn parse_fragment(datagram: &[u8]) -> Option<(u64, u64, u32, usize, usize, &[u8])> {
+/// `(sender, camera session, sequence, part, total parts, payload)`
+type Fragment<'a> = (u64, u64, u32, usize, usize, &'a [u8]);
+
+fn parse_fragment(datagram: &[u8]) -> Option<Fragment<'_>> {
     if datagram.len() <= HEADER || datagram.len() > HEADER + CHUNK + 4 || datagram[0] != MAGIC { return None; }
     let sender = u64::from_be_bytes(datagram[1..9].try_into().ok()?);
     let session_id = u64::from_be_bytes(datagram[9..17].try_into().ok()?);
@@ -285,7 +289,7 @@ fn open_camera(index: u32, wanted: (u32, u32)) -> Result<Camera, String> {
         RequestedFormatType::Closest(CameraFormat::new(Resolution::new(640, 480), FrameFormat::NV12, 30)),
         RequestedFormatType::AbsoluteHighestFrameRate,
     ];
-    let mut last_error = String::from("камера не підтримує жодного відомого формату");
+    let mut last_error = String::from(tr("the camera supports none of the known formats"));
     for attempt in attempts {
         let requested = RequestedFormat::new::<RgbFormat>(attempt);
         match Camera::new(CameraIndex::Index(index), requested) {
@@ -309,6 +313,7 @@ fn crop_to_16x9(image: &RgbImage) -> RgbImage {
     image::imageops::crop_imm(image, (w - crop_w) / 2, (h - crop_h) / 2, crop_w, crop_h).to_image()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn webcam_loop(
     active: Arc<AtomicBool>,
     live: Arc<AtomicBool>,
@@ -325,22 +330,19 @@ fn webcam_loop(
     let mut camera = match open_camera(camera_index, capture_size(quality.load(Ordering::Relaxed))) {
         Ok(camera) => camera,
         Err(error) => {
-            let _ = events.try_send(VideoEvent::Error(format!(
-                "Камера не запустилася: {error}. Перевір, що в Параметрах Windows (Конфіденційність → Камера) \
-                 дозволено доступ для класичних програм і що камеру не займає інша програма."
-            )));
+            let _ = events.try_send(VideoEvent::Error(trf("The camera did not start: {error}. Check that Windows settings (Privacy → Camera) allow desktop apps to use the camera and that no other app is using it.", &[("error", &error)])));
             return;
         }
     };
     let format = camera.camera_format();
     if let Ok(mut info) = diagnostics.format.lock() {
-        *info = format!("{} {}×{}, {} к/с", format.format(),
-            format.resolution().width(), format.resolution().height(), format.frame_rate());
+        *info = trf("{format} {width}×{height}, {fps} fps", &[("format", &format.format()),
+            ("width", &format.resolution().width()), ("height", &format.resolution().height()), ("fps", &format.frame_rate())]);
     }
     let socket = match UdpSocket::bind(("0.0.0.0", 0)) {
         Ok(socket) => socket,
         Err(error) => {
-            let _ = events.try_send(VideoEvent::Error(format!("Порт передачі камери: {error}")));
+            let _ = events.try_send(VideoEvent::Error(trf("Camera send port: {error}", &[("error", &error)])));
             let _ = camera.stop_stream();
             return;
         }
@@ -373,7 +375,7 @@ fn webcam_loop(
             Err(error) => {
                 failures += 1;
                 if failures >= 8 {
-                    let _ = events.try_send(VideoEvent::Error(format!("Камера перестала відповідати: {error}")));
+                    let _ = events.try_send(VideoEvent::Error(trf("The camera stopped responding: {error}", &[("error", &error)])));
                     break;
                 }
                 thread::sleep(Duration::from_millis(40));
@@ -392,9 +394,8 @@ fn webcam_loop(
                 // One corrupt frame is normal. A long streak means this camera
                 // format cannot be decoded: tell the user instead of showing nothing.
                 if decode_failures == 20 {
-                    let _ = events.try_send(VideoEvent::Error(format!(
-                        "Кадри камери ({}) не вдається розпакувати: {error}. Спробуй іншу камеру або якість.",
-                        frame.source_frame_format())));
+                    let _ = events.try_send(VideoEvent::Error(trf("Camera frames ({format}) cannot be decoded: {error}. Try another camera or quality.",
+                        &[("format", &frame.source_frame_format()), ("error", &error)])));
                 }
                 continue;
             }
@@ -404,7 +405,7 @@ fn webcam_loop(
                 match StreamEncoder::new(StreamKind::Camera, target_fps, bitrate) {
                     Ok(encoder) => h264 = Some((mode, encoder)),
                     Err(error) => {
-                        let _ = events.try_send(VideoEvent::Error(format!("Камера: {error}")));
+                        let _ = events.try_send(VideoEvent::Error(trf("Camera: {error}", &[("error", &error)])));
                         break;
                     }
                 }
@@ -419,7 +420,7 @@ fn webcam_loop(
 
             // Local preview (every other frame is plenty for your own tile).
             preview_tick = preview_tick.wrapping_add(1);
-            if preview_tick % 2 == 0 {
+            if preview_tick.is_multiple_of(2) {
                 let (pw, ph) = fit_size(out_w, out_h, 640, 360);
                 let rgba = if (pw, ph) == (out_w, out_h) { rgb_to_rgba(&scaled) } else {
                     let mut copy = scaled.clone();
@@ -454,7 +455,7 @@ fn webcam_loop(
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    let _ = events.try_send(VideoEvent::Error(format!("Камера: {error}")));
+                    let _ = events.try_send(VideoEvent::Error(trf("Camera: {error}", &[("error", &error)])));
                     break;
                 }
             }
@@ -542,7 +543,7 @@ impl VideoSession {
     pub fn start(id: u64, peers: Arc<Mutex<Vec<Ipv4Addr>>>,
         camera_index: Arc<AtomicU32>, quality: Arc<AtomicU32>) -> Result<Self, String> {
         let rx_socket = UdpSocket::bind(("0.0.0.0", VIDEO_PORT))
-            .map_err(|e| format!("Не вдалося відкрити UDP-порт камери {VIDEO_PORT}: {e}"))?;
+            .map_err(|e| trf("Could not open the camera UDP port {port}: {error}", &[("port", &VIDEO_PORT), ("error", &e)]))?;
         rx_socket.set_read_timeout(Some(Duration::from_millis(100)))
             .map_err(|e| e.to_string())?;
         let (events_tx, events_rx) = mpsc::sync_channel(12);

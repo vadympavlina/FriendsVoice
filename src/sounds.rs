@@ -3,6 +3,7 @@
 //! Nothing is read from files: every sound is synthesised from a few musical notes,
 //! so the sounds are crisp at any sample rate and add nothing to the download.
 //! Rising pitch means "on / arrived", falling pitch means "off / left".
+use crate::i18n::{tr, trf};
 use crate::voice;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -26,12 +27,14 @@ pub enum Sound {
     LeaveSelf,
     PeerJoin,
     PeerLeave,
+    /// A chat message arrived while the window is in the background.
+    Message,
 }
 
 #[cfg(test)]
-pub const ALL_SOUNDS: [Sound; 12] = [
+pub const ALL_SOUNDS: [Sound; 13] = [
     Sound::MicOn, Sound::MicOff, Sound::DeafenOn, Sound::DeafenOff, Sound::CameraOn, Sound::CameraOff,
-    Sound::ScreenOn, Sound::ScreenOff, Sound::JoinSelf, Sound::LeaveSelf, Sound::PeerJoin, Sound::PeerLeave,
+    Sound::ScreenOn, Sound::ScreenOff, Sound::JoinSelf, Sound::LeaveSelf, Sound::PeerJoin, Sound::PeerLeave, Sound::Message,
 ];
 
 #[derive(Clone, Copy)]
@@ -65,6 +68,7 @@ const A5: f32 = 880.0;
 const B5: f32 = 987.8;
 const D6: f32 = 1174.7;
 const E6: f32 = 1318.5;
+const G6: f32 = 1568.0;
 
 fn notes(sound: Sound) -> Vec<Note> {
     use Timbre::*;
@@ -89,6 +93,8 @@ fn notes(sound: Sound) -> Vec<Note> {
             note(C5, 0.15, 0.18, 0.40, Soft), note(G4, 0.225, 0.34, 0.42, Soft)],
         // A friend arriving is a two-note bell: clearly different from your own actions.
         Sound::PeerJoin => vec![note(B5, 0.0, 0.34, 0.42, Bell), note(E6, 0.11, 0.52, 0.46, Bell)],
+        // A short, soft double tick: noticeable without being annoying.
+        Sound::Message => vec![note(D6, 0.0, 0.08, 0.30, Soft), note(G6, 0.055, 0.14, 0.30, Soft)],
         Sound::PeerLeave => vec![note(E6, 0.0, 0.26, 0.30, Bell), note(B5, 0.10, 0.40, 0.30, Bell)],
     }
 }
@@ -194,7 +200,7 @@ impl SoundPlayer {
     }
 
     fn build_stream(&self, device_name: &str) -> Result<cpal::Stream, String> {
-        let device = voice::find_output_device(device_name).ok_or("Не знайдено пристрій відтворення")?;
+        let device = voice::find_output_device(device_name).ok_or(tr("Playback device not found"))?;
         let (config, format) = voice::output_config(&device)?;
         let channels = config.channels as usize;
         let error = |e| eprintln!("Sounds output: {e}");
@@ -206,9 +212,9 @@ impl SoundPlayer {
                 move |buf: &mut [i16], _| fill(buf, channels, &mixer, to_i16), error, None),
             SampleFormat::U16 => device.build_output_stream(&config,
                 move |buf: &mut [u16], _| fill(buf, channels, &mixer, to_u16), error, None),
-            _ => return Err("Формат пристрою не підтримується".into()),
-        }.map_err(|e| format!("Звуки: {e}"))?;
-        stream.play().map_err(|e| format!("Звуки: {e}"))?;
+            _ => return Err(tr("Unsupported device format").into()),
+        }.map_err(|e| trf("Sounds: {error}", &[("error", &e)]))?;
+        stream.play().map_err(|e| trf("Sounds: {error}", &[("error", &e)]))?;
         Ok(stream)
     }
 

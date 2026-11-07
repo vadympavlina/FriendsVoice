@@ -60,6 +60,20 @@ EXPAND / FULL SCREEN
     resets. Controls fade after ~2.5 s without mouse movement.
  4. If the friend stops sharing, the expanded view closes by itself.
 
+LANGUAGES
+ 1. First start must be in English. Switch to Українська and Русский on the
+    start screen and in Settings > Profile: every screen must change at once
+    (rail, stage, chat, all settings pages, tooltips, picker).
+ 2. If your name was the default (Friend / Друг) it follows the language.
+ 3. Restart: the chosen language and the window size must be remembered.
+
+CHAT AND NOTIFICATIONS
+ 1. A link such as https://example.com in a message is clickable and opens the
+    browser; punctuation after the link is not part of it.
+ 2. With the window in the background, a friend's message plays a soft sound
+    and flashes the taskbar button.
+ 3. A thin green line above the user bar moves while you speak.
+
 SOUNDS
  Mic/sound/camera/screen on-off tones, your own join/leave chime, and a
  distinct bell when a friend joins or leaves. Settings > Sound has a test
