@@ -176,7 +176,14 @@ mod tests {
 
     /// Every English text passed to `tr(`, `trf(` or `english(` in the source files.
     fn used_texts() -> BTreeSet<String> {
-        let mut found = BTreeSet::new();
+        let (plain, formatted) = used_texts_by_kind();
+        plain.into_iter().chain(formatted).collect()
+    }
+
+    /// `(texts used with tr/english, texts used with trf)`.
+    fn used_texts_by_kind() -> (BTreeSet<String>, BTreeSet<String>) {
+        let mut plain = BTreeSet::new();
+        let mut formatted = BTreeSet::new();
         for (_, source) in SOURCES {
             // Only the code, not the test modules: they contain sample calls.
             let code = without_test_modules(source);
@@ -205,11 +212,11 @@ mod tests {
                             c => text.push(c),
                         }
                     }
-                    found.insert(text);
+                    if marker == "trf(" { formatted.insert(text); } else { plain.insert(text); }
                 }
             }
         }
-        found
+        (plain, formatted)
     }
 
     fn placeholders(text: &str) -> BTreeSet<String> {
@@ -240,6 +247,15 @@ mod tests {
         let table: HashSet<&str> = TABLE.iter().map(|(en, _, _)| *en).collect();
         let missing: Vec<String> = used_texts().into_iter().filter(|t| !table.contains(t.as_str())).collect();
         assert!(missing.is_empty(), "texts missing from i18n_table.rs:\n{}", missing.join("\n"));
+    }
+
+    #[test]
+    fn texts_with_placeholders_are_only_used_with_trf() {
+        let (plain, _) = used_texts_by_kind();
+        for text in plain {
+            assert!(placeholders(&text).is_empty(),
+                "\"{text}\" has placeholders but is not passed to trf(): the user would see {{...}}");
+        }
     }
 
     #[test]
